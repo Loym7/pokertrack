@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <title>PokerTrack</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -1897,8 +1897,65 @@
       return [state, setState];
     }
 
+    // ─── LOGIN ────────────────────────────────────────────────────
+    const PT_AUTH_KEY = 'pt_auth';
+    const PT_PWD_HASH = btoa('Brume'); // encodage simple
+
+    function LoginScreen({ onUnlock }) {
+      const [pwd, setPwd]     = useState('');
+      const [error, setError] = useState(false);
+      const [show, setShow]   = useState(false);
+
+      const tryLogin = () => {
+        if (btoa(pwd) === PT_PWD_HASH) {
+          localStorage.setItem(PT_AUTH_KEY, PT_PWD_HASH);
+          onUnlock();
+        } else {
+          setError(true);
+          setPwd('');
+          setTimeout(() => setError(false), 1500);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl p-8 w-80 shadow-2xl space-y-6">
+            <div className="text-center space-y-1">
+              <span className="text-5xl">♠</span>
+              <h1 className="text-2xl font-bold text-green-400 tracking-wide">PokerTrack</h1>
+              <p className="text-xs text-gray-500">Accès privé</p>
+            </div>
+            <div className="space-y-3">
+              <div className="relative">
+                <input
+                  type={show ? 'text' : 'password'}
+                  value={pwd}
+                  onChange={e => setPwd(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && tryLogin()}
+                  placeholder="Mot de passe"
+                  autoFocus
+                  className={`w-full bg-gray-700 border rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none pr-10 transition-colors
+                    ${error ? 'border-red-500 animate-pulse' : 'border-gray-600 focus:border-green-500'}`}
+                />
+                <button onClick={() => setShow(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 text-xs">
+                  {show ? '🙈' : '👁'}
+                </button>
+              </div>
+              {error && <p className="text-red-400 text-xs text-center">Mot de passe incorrect</p>}
+              <button onClick={tryLogin}
+                className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg transition-colors">
+                Entrer
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // ─── ROOT ─────────────────────────────────────────────────────
     function PokerTracker() {
+      const [unlocked, setUnlocked] = useState(() => localStorage.getItem(PT_AUTH_KEY) === PT_PWD_HASH);
       const [activeTab, setActiveTab]       = useState('library');
       const [savedGrids, setSavedGrids]     = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions]       = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
@@ -1912,6 +1969,8 @@
         return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
       }, []);
 
+      if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
+
       const TABS = [
         { id:'library',   emoji:'📋', label:'Mes Grilles'        },
         { id:'grid',      emoji:'📅', label:'Grille du Jour'     },
@@ -1921,57 +1980,70 @@
 
       return (
         <div className="min-h-screen bg-gray-900 text-white">
-          <header className="bg-gray-950 border-b border-gray-800 px-5 py-3 flex items-center gap-3">
-            <span className="text-3xl leading-none">♠</span>
+
+          {/* ── Header ── */}
+          <header className="bg-gray-950 border-b border-gray-800 px-4 py-2.5 flex items-center gap-3">
+            <span className="text-2xl leading-none">♠</span>
             <div>
-              <h1 className="text-xl font-bold text-green-400 tracking-wide leading-none">PokerTrack</h1>
-              <p className="text-xs text-gray-600 leading-none mt-0.5">Tournament Tracker</p>
+              <h1 className="text-lg font-bold text-green-400 tracking-wide leading-none">PokerTrack</h1>
+              <p className="text-xs text-gray-600 leading-none mt-0.5 hidden sm:block">Tournament Tracker</p>
             </div>
-            <div className="ml-auto flex items-center gap-4">
-              <div className="flex gap-3 text-xs text-gray-600">
-                <span>{savedGrids.length} grille{savedGrids.length!==1?'s':''}</span>
+            <div className="ml-auto flex items-center gap-3">
+              {/* Stats — masquées sur mobile */}
+              <div className="hidden md:flex gap-3 text-xs text-gray-600">
+                <span>{savedGrids.length} grilles</span>
                 <span>·</span>
                 <span>{sessions.length} sessions</span>
                 <span>·</span>
-                <span>{played.length} tournois joués</span>
+                <span>{played.length} tournois</span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs" title={online ? 'Synchronisé avec Firebase' : 'Hors-ligne — données locales'}>
-                <span className={`w-2 h-2 rounded-full ${online ? 'bg-green-400' : 'bg-gray-600'}`} />
-                <span className={online ? 'text-green-500' : 'text-gray-600'}>{online ? '☁ Sync' : 'Hors-ligne'}</span>
+              {/* Sync */}
+              <div className="flex items-center gap-1.5 text-xs" title={online ? 'Synchronisé' : 'Hors-ligne'}>
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${online ? 'bg-green-400' : 'bg-gray-600'}`} />
+                <span className={`hidden sm:inline ${online ? 'text-green-500' : 'text-gray-600'}`}>{online ? '☁ Sync' : 'Hors-ligne'}</span>
               </div>
-              <button
-                onClick={() => {
-                  if (confirm('Réinitialiser toutes les données avec les démos ?')) {
-                    setSavedGrids(INIT_GRIDS);
-                    setSessions(INIT_SESSIONS);
-                    setPlayed(INIT_PLAYED);
-                  }
-                }}
-                className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                title="Réinitialiser les données">
-                ↺ Reset
-              </button>
+              {/* Lock */}
+              <button onClick={() => { localStorage.removeItem(PT_AUTH_KEY); setUnlocked(false); }}
+                className="text-gray-600 hover:text-gray-400 transition-colors text-sm" title="Se déconnecter">🔒</button>
+              {/* Reset — masqué sur mobile */}
+              <button onClick={() => { if (confirm('Réinitialiser toutes les données ?')) { setSavedGrids(INIT_GRIDS); setSessions(INIT_SESSIONS); setPlayed(INIT_PLAYED); }}}
+                className="hidden sm:inline text-xs text-gray-600 hover:text-red-400 transition-colors" title="Reset">↺</button>
             </div>
           </header>
 
-          <nav className="bg-gray-900 border-b border-gray-800 px-2 flex gap-0.5 overflow-x-auto">
+          {/* ── Nav desktop (top) ── */}
+          <nav className="hidden md:flex bg-gray-900 border-b border-gray-800 px-2 gap-0.5">
             {TABS.map(t => (
               <button key={t.id} onClick={() => setActiveTab(t.id)}
                 className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5
-                  ${activeTab===t.id
-                    ? 'border-green-500 text-green-400'
-                    : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'}`}>
+                  ${activeTab===t.id ? 'border-green-500 text-green-400' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>
                 <span>{t.emoji}</span>{t.label}
               </button>
             ))}
           </nav>
 
-          <main className="max-w-screen-xl mx-auto">
+          {/* ── Contenu principal ── */}
+          <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
             {activeTab==='library'   && <GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} />}
             {activeTab==='grid'      && <DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} />}
             {activeTab==='sessions'  && <SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} />}
             {activeTab==='dashboard' && <DashboardTab sessions={sessions} playedTournaments={played} />}
           </main>
+
+          {/* ── Nav mobile (bottom) ── */}
+          <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-gray-950 border-t border-gray-800 flex z-40">
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors
+                  ${activeTab===t.id ? 'text-green-400' : 'text-gray-500'}`}>
+                <span className="text-xl leading-none">{t.emoji}</span>
+                <span className="text-[10px] font-medium leading-none truncate w-full text-center px-1">
+                  {t.label.split(' ')[0]}
+                </span>
+              </button>
+            ))}
+          </nav>
+
         </div>
       );
     }
