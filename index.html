@@ -1,0 +1,1982 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PokerTrack</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script>
+    firebase.initializeApp({
+      apiKey:            "AIzaSyDKAJlbrMq_gyT-2D-ijO_eTJyJu0NXhLg",
+      authDomain:        "pockertrack.firebaseapp.com",
+      projectId:         "pockertrack",
+      storageBucket:     "pockertrack.firebasestorage.app",
+      messagingSenderId: "725111015737",
+      appId:             "1:725111015737:web:d27e07671e4234443880e8",
+    });
+    const db = firebase.firestore();
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111827; font-family: ui-sans-serif, system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useRef, useEffect } = React;
+    const {
+      LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+      XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList,
+    } = Recharts;
+
+    // ─── CONSTANTS ────────────────────────────────────────────────
+    const ROOMS    = ['Winamax', 'Betclic', 'PMU', 'Live'];
+    const BUY_INS  = [1, 2, 3, 5, 10, 20, 50, 100, 150];
+    const FIELDS   = ['0-149', '150-499', '500-999', '1000-2000', '2000+'];
+    const FORMATS  = ['PKO', 'SKO', 'MKO', 'VNL'];
+    const PRIORITIES = ['Niv 1', 'Niv 2', 'Niv 3'];
+
+    const ROOM_CLS = {
+      Winamax: 'bg-orange-600 text-white',
+      Betclic: 'bg-lime-700 text-white',
+      PMU:     'bg-blue-600 text-white',
+      Live:    'bg-yellow-600 text-white',
+    };
+    const PRIO_CLS = {
+      'Niv 1': 'bg-green-700 text-white',
+      'Niv 2': 'bg-orange-500 text-white',
+      'Niv 3': 'bg-red-600 text-white',
+    };
+    const FMT_CLS = {
+      PKO: 'bg-purple-600 text-white',
+      SKO: 'bg-indigo-500 text-white',
+      MKO: 'bg-pink-600 text-white',
+      VNL: 'bg-teal-600 text-white',
+    };
+
+    const ROOM_CHART = { Winamax: '#ea580c', Betclic: '#65a30d', PMU: '#2563eb', Live: '#ca8a04' };
+    const FMT_CHART  = { PKO: '#9333ea', SKO: '#6366f1', MKO: '#ec4899', VNL: '#0d9488' };
+    const SESSION_CHART = { Matin: '#f59e0b', Jour: '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
+
+    // ─── HELPERS ──────────────────────────────────────────────────
+    const toStr = d => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+    const ago = n => { const d = new Date(); d.setDate(d.getDate() - n); return toStr(d); };
+    const todayStr = toStr(new Date());
+
+    let _id = 1000;
+    const uid = () => ++_id;
+
+    function calcDuration(start, end) {
+      if (!start || !end) return '';
+      const [sh, sm] = start.split(':').map(Number);
+      let [eh, em] = end.split(':').map(Number);
+      if (eh < sh) eh += 24;
+      const mins = (eh * 60 + em) - (sh * 60 + sm);
+      return `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}`;
+    }
+
+    function typeSession(start) {
+      if (!start) return 'Soir';
+      const h = parseInt(start.split(':')[0], 10);
+      if (h < 12) return 'Matin';
+      if (h < 17) return 'Jour';
+      return 'Soir';
+    }
+
+    // ─── DEMO DATA ────────────────────────────────────────────────
+    const SESSION_TYPES = ['Matin', 'Jour', 'Soir'];
+
+    const INIT_GRIDS = [
+      { id:1, name:'Grille Jour', sessionType:'Jour', tournaments: [
+        { id:501, name:'The Chuck',     room:'Betclic', startTime:'10:00', buyIn:10, field:'0-149',     format:'PKO', priority:'Niv 1', entardive:10.0 },
+        { id:502, name:"L'Attaque",     room:'PMU',     startTime:'10:00', buyIn:10, field:'0-149',     format:'PKO', priority:'Niv 1', entardive:10.0 },
+        { id:503, name:'Coffee Time',   room:'Winamax', startTime:'10:00', buyIn:10, field:'0-149',     format:'PKO', priority:'Niv 1', entardive:10.0 },
+        { id:504, name:'Monster Stack', room:'Winamax', startTime:'10:00', buyIn:10, field:'0-149',     format:'VNL', priority:'Niv 1', entardive:10.0 },
+        { id:505, name:'Fusion',        room:'Winamax', startTime:'10:30', buyIn:5,  field:'1000-2000', format:'SKO', priority:'Niv 1', entardive:10.5 },
+        { id:506, name:'Classiko',      room:'Betclic', startTime:'10:30', buyIn:20, field:'0-149',     format:'PKO', priority:'Niv 1', entardive:10.5 },
+        { id:507, name:'Sphere',        room:'Winamax', startTime:'10:30', buyIn:20, field:'150-499',   format:'SKO', priority:'Niv 2', entardive:10.5 },
+        { id:508, name:'Mystery KO',    room:'Winamax', startTime:'10:45', buyIn:5,  field:'0-149',     format:'MKO', priority:'Niv 3', entardive:10.5 },
+        { id:509, name:'Kimura',        room:'Betclic', startTime:'11:00', buyIn:5,  field:'150-499',   format:'SKO', priority:'Niv 2', entardive:11.0 },
+        { id:510, name:'MonsterStack',  room:'Winamax', startTime:'11:00', buyIn:5,  field:'0-149',     format:'VNL', priority:'Niv 2', entardive:11.0 },
+        { id:511, name:'Mystery KO',    room:'Winamax', startTime:'11:00', buyIn:10, field:'0-149',     format:'MKO', priority:'Niv 3', entardive:11.0 },
+        { id:512, name:'Le Brunch',     room:'PMU',     startTime:'11:00', buyIn:20, field:'0-149',     format:'PKO', priority:'Niv 1', entardive:11.0 },
+        { id:513, name:'Smash KO',      room:'Betclic', startTime:'11:30', buyIn:10, field:'0-149',     format:'SKO', priority:'Niv 1', entardive:11.5 },
+        { id:514, name:'Classic',       room:'Betclic', startTime:'11:40', buyIn:5,  field:'0-149',     format:'VNL', priority:'Niv 2', entardive:11.5 },
+        { id:515, name:'Booster',       room:'Winamax', startTime:'11:15', buyIn:20, field:'0-149',     format:'PKO', priority:'Niv 3', entardive:11.5 },
+        { id:516, name:'Fast Food',     room:'Winamax', startTime:'12:00', buyIn:5,  field:'1000-2000', format:'SKO', priority:'Niv 3', entardive:12.0 },
+        { id:517, name:'Midi Express',  room:'PMU',     startTime:'12:00', buyIn:10, field:'0-149',     format:'PKO', priority:'Niv 1', entardive:12.0 },
+        { id:518, name:'Thunder',       room:'Winamax', startTime:'12:00', buyIn:10, field:'500-999',   format:'SKO', priority:'Niv 2', entardive:12.0 },
+        { id:519, name:'Luncha Libra',  room:'Betclic', startTime:'12:00', buyIn:20, field:'0-149',     format:'SKO', priority:'Niv 1', entardive:12.0 },
+        { id:520, name:'Bowling',       room:'Winamax', startTime:'12:30', buyIn:5,  field:'500-999',   format:'PKO', priority:'Niv 3', entardive:12.5 },
+        { id:521, name:'Critical Eat',  room:'Betclic', startTime:'12:30', buyIn:10, field:'0-149',     format:'SKO', priority:'Niv 3', entardive:12.5 },
+        { id:522, name:'Trident SKO',   room:'Winamax', startTime:'12:45', buyIn:10, field:'500-999',   format:'SKO', priority:'Niv 3', entardive:12.5 },
+      ]},
+      { id:2, name:'Grille Soirée', sessionType:'Soir', tournaments: [
+        { id:601, name:'Slam',            room:'Betclic', startTime:'18:00', buyIn:10, field:'150-499',   format:'SKO', priority:'Niv 1', entardive:18.0 },
+        { id:602, name:'La Bataille',     room:'PMU',     startTime:'18:00', buyIn:10, field:'150-499',   format:'PKO', priority:'Niv 1', entardive:18.0 },
+        { id:603, name:'Cyber',           room:'Winamax', startTime:'18:00', buyIn:10, field:'2000+',     format:'SKO', priority:'Niv 1', entardive:18.0 },
+        { id:604, name:'Golden Mystery',  room:'Winamax', startTime:'18:00', buyIn:20, field:'150-499',   format:'MKO', priority:'Niv 1', entardive:18.0 },
+        { id:605, name:'Guerilla',        room:'Winamax', startTime:'18:30', buyIn:5,  field:'1000-2000', format:'PKO', priority:'Niv 1', entardive:18.5 },
+        { id:606, name:'Sparring',        room:'Betclic', startTime:'18:40', buyIn:10, field:'0-149',     format:'VNL', priority:'Niv 2', entardive:18.5 },
+        { id:607, name:'Monster Stack',   room:'Winamax', startTime:'18:30', buyIn:10, field:'500-999',   format:'VNL', priority:'Niv 1', entardive:18.5 },
+        { id:608, name:"Mini it's Time",  room:'Betclic', startTime:'19:00', buyIn:5,  field:'1000-2000', format:'SKO', priority:'Niv 1', entardive:19.0 },
+        { id:609, name:'Crystal Mystery', room:'Winamax', startTime:'19:00', buyIn:5,  field:'1000-2000', format:'MKO', priority:'Niv 3', entardive:19.0 },
+        { id:610, name:'Cosmos',          room:'Winamax', startTime:'19:00', buyIn:20, field:'1000-2000', format:'SKO', priority:'Niv 2', entardive:19.0 },
+        { id:611, name:'Mini Clash Royal',room:'PMU',     startTime:'19:00', buyIn:5,  field:'500-999',   format:'PKO', priority:'Niv 2', entardive:19.0 },
+        { id:612, name:'Royal Rumbler',   room:'Betclic', startTime:'19:30', buyIn:20, field:'150-499',   format:'SKO', priority:'Niv 2', entardive:19.5 },
+        { id:613, name:'Le Gladiateur',   room:'PMU',     startTime:'19:30', buyIn:20, field:'150-499',   format:'PKO', priority:'Niv 1', entardive:19.5 },
+        { id:614, name:'Mini Banger',     room:'Betclic', startTime:'19:45', buyIn:5,  field:'150-499',   format:'VNL', priority:'Niv 3', entardive:19.5 },
+        { id:615, name:'Atom',            room:'Winamax', startTime:'19:45', buyIn:5,  field:'2000+',     format:'SKO', priority:'Niv 2', entardive:19.5 },
+        { id:616, name:'All I Need',      room:'Betclic', startTime:'20:00', buyIn:10, field:'500-999',   format:'SKO', priority:'Niv 2', entardive:20.0 },
+        { id:617, name:"L'Arène",         room:'PMU',     startTime:'20:00', buyIn:10, field:'150-499',   format:'PKO', priority:'Niv 1', entardive:20.0 },
+        { id:618, name:'Supernova',       room:'Winamax', startTime:'20:00', buyIn:10, field:'2000+',     format:'SKO', priority:'Niv 3', entardive:20.0 },
+        { id:619, name:'Sunday Surprise', room:'Winamax', startTime:'20:00', buyIn:10, field:'2000+',     format:'SKO', priority:'Niv 1', entardive:20.0 },
+        { id:620, name:'Sniper',          room:'Winamax', startTime:'20:15', buyIn:5,  field:'500-999',   format:'PKO', priority:'Niv 3', entardive:20.0 },
+        { id:621, name:'Henni Show',      room:'Winamax', startTime:'20:30', buyIn:5,  field:'500-999',   format:'PKO', priority:'Niv 2', entardive:20.5 },
+        { id:622, name:'Major Mystery',   room:'Winamax', startTime:'20:30', buyIn:10, field:'500-999',   format:'MKO', priority:'Niv 3', entardive:20.5 },
+        { id:623, name:'Le Trident',      room:'Winamax', startTime:'20:30', buyIn:10, field:'1000-2000', format:'SKO', priority:'Niv 1', entardive:20.5 },
+      ]},
+    ];
+
+    const INIT_SESSIONS = [
+      { id: 1, code:'G1',  date:'2026-03-08', type:'Grind',   start:'17:00', end:'23:40', typeSession:'Soir',  hands:1700, duration:'6h40' },
+      { id: 2, code:'G2',  date:'2026-03-09', type:'Grind',   start:'08:00', end:'11:10', typeSession:'Jour',  hands:900,  duration:'3h10' },
+      { id: 3, code:'G3',  date:'2026-03-10', type:'Grind',   start:'08:00', end:'12:40', typeSession:'Jour',  hands:900,  duration:'4h40' },
+      { id: 4, code:'G4',  date:'2026-03-10', type:'Grind',   start:'17:00', end:'01:10', typeSession:'Soir',  hands:1700, duration:'8h10' },
+      { id: 5, code:'G5',  date:'2026-03-12', type:'Grind',   start:'08:15', end:'12:55', typeSession:'Jour',  hands:1100, duration:'4h40' },
+      { id: 6, code:'G6',  date:'2026-03-12', type:'Grind',   start:'18:15', end:'22:45', typeSession:'Soir',  hands:1300, duration:'4h30' },
+      { id: 7, code:'T1',  date:'2026-03-12', type:'Travail', start:'13:00', end:'16:00', typeSession:'Jour',  hands:0,    duration:'3h00' },
+      { id: 8, code:'T2',  date:'2026-03-13', type:'Travail', start:'08:00', end:'10:00', typeSession:'Matin', hands:0,    duration:'2h00' },
+      { id: 9, code:'T3',  date:'2026-03-14', type:'Travail', start:'15:00', end:'17:00', typeSession:'Jour',  hands:0,    duration:'2h00' },
+      { id:10, code:'G7',  date:'2026-03-15', type:'Grind',   start:'19:00', end:'23:15', typeSession:'Soir',  hands:1400, duration:'4h15' },
+      { id:11, code:'T4',  date:'2026-03-16', type:'Travail', start:'13:00', end:'14:00', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:12, code:'G8',  date:'2026-03-17', type:'Grind',   start:'17:00', end:'00:00', typeSession:'Soir',  hands:1400, duration:'7h00' },
+      { id:13, code:'T5',  date:'2026-03-17', type:'Travail', start:'13:00', end:'14:00', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:14, code:'G9',  date:'2026-03-18', type:'Grind',   start:'17:00', end:'23:41', typeSession:'Soir',  hands:1800, duration:'6h41' },
+      { id:15, code:'T6',  date:'2026-03-18', type:'Travail', start:'14:20', end:'15:50', typeSession:'Jour',  hands:0,    duration:'1h30' },
+      { id:16, code:'G10', date:'2026-03-19', type:'Grind',   start:'08:30', end:'11:50', typeSession:'Jour',  hands:900,  duration:'3h20' },
+      { id:17, code:'T7',  date:'2026-03-19', type:'Travail', start:'16:30', end:'17:00', typeSession:'Jour',  hands:0,    duration:'0h30' },
+      { id:18, code:'T8',  date:'2026-03-20', type:'Travail', start:'09:15', end:'10:45', typeSession:'Matin', hands:0,    duration:'1h30' },
+      { id:19, code:'T9',  date:'2026-03-20', type:'Travail', start:'12:15', end:'12:45', typeSession:'Jour',  hands:0,    duration:'0h30' },
+      { id:20, code:'T10', date:'2026-03-20', type:'Travail', start:'16:15', end:'17:15', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:21, code:'G11', date:'2026-03-20', type:'Grind',   start:'17:30', end:'22:30', typeSession:'Soir',  hands:800,  duration:'5h00' },
+      { id:22, code:'G12', date:'2026-03-21', type:'Grind',   start:'08:40', end:'12:40', typeSession:'Jour',  hands:1200, duration:'4h00' },
+      { id:23, code:'T11', date:'2026-03-21', type:'Travail', start:'14:00', end:'16:00', typeSession:'Jour',  hands:0,    duration:'2h00' },
+      { id:24, code:'G13', date:'2026-03-22', type:'Grind',   start:'18:00', end:'22:30', typeSession:'Soir',  hands:1500, duration:'4h30' },
+      { id:25, code:'T12', date:'2026-03-22', type:'Travail', start:'11:00', end:'12:00', typeSession:'Matin', hands:0,    duration:'1h00' },
+      { id:26, code:'G14', date:'2026-03-24', type:'Grind',   start:'10:30', end:'14:30', typeSession:'Jour',  hands:800,  duration:'4h00' },
+      { id:27, code:'T13', date:'2026-03-24', type:'Travail', start:'17:00', end:'19:00', typeSession:'Soir',  hands:0,    duration:'2h00' },
+      { id:28, code:'G15', date:'2026-03-25', type:'Grind',   start:'08:30', end:'12:50', typeSession:'Jour',  hands:900,  duration:'4h20' },
+      { id:29, code:'T14', date:'2026-03-26', type:'Travail', start:'10:30', end:'12:30', typeSession:'Matin', hands:0,    duration:'2h00' },
+      { id:30, code:'T15', date:'2026-03-26', type:'Travail', start:'12:30', end:'13:30', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:31, code:'G16', date:'2026-03-26', type:'Grind',   start:'17:00', end:'23:23', typeSession:'Soir',  hands:1400, duration:'6h23' },
+      { id:32, code:'G17', date:'2026-03-27', type:'Grind',   start:'11:00', end:'14:30', typeSession:'Jour',  hands:800,  duration:'3h30' },
+      { id:33, code:'T16', date:'2026-03-27', type:'Travail', start:'15:30', end:'16:30', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:34, code:'T17', date:'2026-03-29', type:'Travail', start:'14:00', end:'18:00', typeSession:'Jour',  hands:0,    duration:'4h00' },
+      { id:35, code:'T18', date:'2026-03-30', type:'Travail', start:'14:00', end:'18:00', typeSession:'Jour',  hands:0,    duration:'4h00' },
+      { id:36, code:'G18', date:'2026-03-30', type:'Grind',   start:'17:00', end:'23:59', typeSession:'Soir',  hands:1800, duration:'6h59' },
+      { id:37, code:'G19', date:'2026-04-01', type:'Grind',   start:'14:30', end:'00:30', typeSession:'Live',  hands:0,    duration:'10h00' },
+      { id:38, code:'G20', date:'2026-04-03', type:'Grind',   start:'10:00', end:'14:30', typeSession:'Jour',  hands:0,    duration:'4h30' },
+      { id:39, code:'T19', date:'2026-04-04', type:'Travail', start:'15:30', end:'19:30', typeSession:'Jour',  hands:0,    duration:'4h00' },
+      { id:40, code:'T20', date:'2026-04-05', type:'Travail', start:'10:00', end:'10:30', typeSession:'Matin', hands:0,    duration:'0h30' },
+      { id:41, code:'G21', date:'2026-04-06', type:'Grind',   start:'18:00', end:'01:30', typeSession:'Soir',  hands:0,    duration:'7h30' },
+      { id:42, code:'T21', date:'2026-04-07', type:'Travail', start:'13:00', end:'14:00', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:43, code:'G22', date:'2026-04-07', type:'Grind',   start:'17:00', end:'22:00', typeSession:'Soir',  hands:0,    duration:'5h00' },
+      { id:44, code:'T22', date:'2026-04-08', type:'Travail', start:'14:00', end:'15:00', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:45, code:'T23', date:'2026-04-09', type:'Travail', start:'14:00', end:'15:00', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:46, code:'T24', date:'2026-04-09', type:'Travail', start:'11:00', end:'12:30', typeSession:'Matin', hands:0,    duration:'1h30' },
+      { id:47, code:'G23', date:'2026-04-09', type:'Grind',   start:'17:00', end:'22:30', typeSession:'Soir',  hands:0,    duration:'5h30' },
+      { id:48, code:'G24', date:'2026-04-10', type:'Grind',   start:'12:30', end:'15:00', typeSession:'Jour',  hands:0,    duration:'2h30' },
+      { id:49, code:'G25', date:'2026-04-12', type:'Grind',   start:'18:30', end:'21:50', typeSession:'Soir',  hands:0,    duration:'3h20' },
+      { id:50, code:'G26', date:'2026-04-13', type:'Grind',   start:'11:30', end:'15:30', typeSession:'Jour',  hands:0,    duration:'4h00' },
+      { id:51, code:'T25', date:'2026-04-14', type:'Travail', start:'08:30', end:'10:30', typeSession:'Matin', hands:0,    duration:'2h00' },
+      { id:52, code:'G27', date:'2026-04-14', type:'Grind',   start:'10:30', end:'14:30', typeSession:'Jour',  hands:0,    duration:'4h00' },
+      { id:53, code:'T26', date:'2026-04-14', type:'Travail', start:'15:30', end:'16:30', typeSession:'Jour',  hands:0,    duration:'1h00' },
+      { id:54, code:'T27', date:'2026-04-15', type:'Travail', start:'08:15', end:'10:15', typeSession:'Matin', hands:0,    duration:'2h00' },
+      { id:55, code:'G28', date:'2026-04-15', type:'Grind',   start:'10:30', end:'17:15', typeSession:'Jour',  hands:0,    duration:'6h45' },
+      { id:56, code:'G29', date:'2026-04-15', type:'Grind',   start:'21:00', end:'23:30', typeSession:'Soir',  hands:0,    duration:'2h30' },
+      { id:57, code:'T28', date:'2026-04-16', type:'Travail', start:'09:00', end:'09:30', typeSession:'Matin', hands:0,    duration:'0h30' },
+      { id:58, code:'G30', date:'2026-04-16', type:'Grind',   start:'09:30', end:'11:30', typeSession:'Jour',  hands:0,    duration:'2h00' },
+      { id:59, code:'G31', date:'2026-04-16', type:'Grind',   start:'18:30', end:'23:30', typeSession:'Soir',  hands:0,    duration:'5h00' },
+    ];
+
+    const mk = (id,date,sess,room,buyin,field,fmt,itm,gains,nbEntry) => ({
+      id, date, session:sess, room, buyIn:buyin, entry:true,
+      reEntry: nbEntry > 1,
+      field, format:fmt, itm, gains, nbEntry,
+      profit: Math.round((gains - buyin * nbEntry) * 100) / 100,
+    });
+
+    const INIT_PLAYED = [
+      mk(1,'2026-03-08','G1','PMU',2,'1000-2000','MKO',false,26,1),
+      mk(2,'2026-03-08','G1','PMU',5,'2000+','MKO',false,0,1),
+      mk(3,'2026-03-08','G1','Betclic',5,'1000-2000','PKO',false,0,1),
+      mk(4,'2026-03-08','G1','Winamax',5,'1000-2000','PKO',false,1.13,1),
+      mk(5,'2026-03-08','G1','Winamax',5,'2000+','SKO',false,0.5,1),
+      mk(6,'2026-03-08','G1','Winamax',2,'2000+','SKO',false,0,1),
+      mk(7,'2026-03-08','G1','PMU',5,'1000-2000','MKO',false,0,1),
+      mk(8,'2026-03-08','G1','Winamax',2,'2000+','SKO',false,0.4,1),
+      mk(9,'2026-03-08','G1','Winamax',5,'1000-2000','PKO',true,11.78,1),
+      mk(10,'2026-03-08','G1','Betclic',5,'150-499','PKO',false,1.13,1),
+      mk(11,'2026-03-08','G1','Betclic',5,'2000+','PKO',true,13.02,1),
+      mk(12,'2026-03-08','G1','Winamax',5,'2000+','SKO',false,0,1),
+      mk(13,'2026-03-08','G1','Winamax',5,'150-499','VNL',false,0,1),
+      mk(14,'2026-03-08','G1','Winamax',5,'2000+','SKO',false,0,1),
+      mk(15,'2026-03-08','G1','Winamax',5,'500-999','PKO',false,2.26,1),
+      mk(16,'2026-03-08','G1','Winamax',2,'2000+','SKO',false,2,1),
+      mk(17,'2026-03-08','G1','Winamax',2,'1000-2000','SKO',false,0,1),
+      mk(18,'2026-03-09','G2','Winamax',2,'0-149','PKO',false,1.8,1),
+      mk(19,'2026-03-09','G2','Winamax',5,'0-149','VNL',true,8.47,1),
+      mk(20,'2026-03-09','G2','Betclic',5,'0-149','PKO',false,0,1),
+      mk(21,'2026-03-09','G2','Winamax',5,'500-999','SKO',false,1.75,2),
+      mk(22,'2026-03-09','G2','Winamax',5,'500-999','SKO',false,2,1),
+      mk(23,'2026-03-09','G2','PMU',2,'150-499','MKO',false,0,1),
+      mk(24,'2026-03-09','G2','Winamax',2,'150-499','SKO',false,0.4,1),
+      mk(25,'2026-03-09','G2','PMU',5,'0-149','PKO',false,1.13,1),
+      mk(26,'2026-03-09','G2','Betclic',5,'0-149','VNL',false,0,1),
+      mk(27,'2026-03-09','G2','Winamax',5,'1000-2000','SKO',true,11.89,1),
+      mk(28,'2026-03-10','G3','Winamax',2,'0-149','VNL',false,0,1),
+      mk(29,'2026-03-10','G3','Winamax',5,'0-149','VNL',false,0,1),
+      mk(30,'2026-03-10','G3','Betclic',5,'0-149','PKO',true,104.64,1),
+      mk(31,'2026-03-10','G3','Winamax',5,'500-999','SKO',false,0,1),
+      mk(32,'2026-03-10','G3','Winamax',5,'500-999','SKO',false,2.5,2),
+      mk(33,'2026-03-10','G3','PMU',2,'150-499','MKO',false,2.89,1),
+      mk(34,'2026-03-10','G3','Winamax',2,'150-499','SKO',false,0,1),
+      mk(35,'2026-03-10','G3','Winamax',2,'500-999','SKO',false,0,1),
+      mk(36,'2026-03-10','G3','PMU',5,'0-149','PKO',false,4.52,1),
+      mk(37,'2026-03-10','G3','Winamax',5,'1000-2000','SKO',false,3,1),
+      mk(38,'2026-03-10','G4','PMU',2,'1000-2000','MKO',true,62.21,1),
+      mk(39,'2026-03-10','G4','PMU',5,'2000+','MKO',false,3.38,1),
+      mk(40,'2026-03-10','G4','Betclic',5,'1000-2000','PKO',false,1.13,1),
+      mk(41,'2026-03-10','G4','Winamax',5,'1000-2000','PKO',false,4.51,1),
+      mk(42,'2026-03-10','G4','Winamax',5,'2000+','SKO',false,0,1),
+      mk(43,'2026-03-10','G4','Winamax',2,'2000+','SKO',false,0,1),
+      mk(44,'2026-03-10','G4','Winamax',5,'1000-2000','PKO',false,3.39,1),
+      mk(45,'2026-03-10','G4','Betclic',5,'2000+','PKO',false,1.13,1),
+      mk(46,'2026-03-10','G4','Winamax',2,'500-999','VNL',true,114.35,1),
+      mk(47,'2026-03-10','G4','Winamax',5,'500-999','VNL',false,0,1),
+      mk(48,'2026-03-10','G4','Winamax',5,'2000+','SKO',false,0,2),
+      mk(49,'2026-03-10','G4','Winamax',5,'2000+','SKO',false,8.8,2),
+      mk(50,'2026-03-12','G5','Winamax',5,'0-149','VNL',false,0,2),
+      mk(51,'2026-03-12','G5','Winamax',2,'0-149','VNL',false,0,1),
+      mk(52,'2026-03-12','G5','Betclic',5,'0-149','PKO',true,173.8,1),
+      mk(53,'2026-03-12','G5','Winamax',5,'500-999','SKO',false,1.25,2),
+      mk(54,'2026-03-12','G5','Winamax',5,'500-999','SKO',false,0,2),
+      mk(55,'2026-03-12','G5','PMU',2,'150-499','MKO',false,0,1),
+      mk(56,'2026-03-12','G5','Winamax',2,'150-499','SKO',false,0,1),
+      mk(57,'2026-03-12','G5','PMU',5,'0-149','PKO',false,0,1),
+      mk(58,'2026-03-12','G5','Betclic',5,'0-149','VNL',false,0,1),
+      mk(59,'2026-03-12','G5','Winamax',5,'1000-2000','SKO',false,0.7,2),
+      mk(60,'2026-03-12','G6','Betclic',5,'1000-2000','PKO',false,2.82,1),
+      mk(61,'2026-03-12','G6','Winamax',5,'2000+','SKO',false,0,1),
+      mk(62,'2026-03-12','G6','Winamax',5,'1000-2000','PKO',true,907.08,1),
+      mk(63,'2026-03-12','G6','Winamax',5,'150-499','VNL',false,0,1),
+      mk(64,'2026-03-12','G6','Betclic',5,'2000+','PKO',false,0,1),
+      mk(65,'2026-03-12','G6','Winamax',2,'500-999','VNL',false,0,1),
+      mk(66,'2026-03-12','G6','Winamax',5,'500-999','VNL',false,0,1),
+      mk(67,'2026-03-12','G6','Winamax',5,'2000+','SKO',false,6,1),
+      mk(68,'2026-03-12','G6','Betclic',5,'150-499','VNL',false,0,1),
+      mk(69,'2026-03-12','G6','Winamax',2,'2000+','SKO',false,0,1),
+      mk(70,'2026-03-12','G6','Winamax',5,'500-999','PKO',false,0,1),
+      mk(71,'2026-03-12','G6','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(72,'2026-03-12','G6','Winamax',2,'2000+','SKO',true,2,1),
+      mk(73,'2026-03-15','G7','Winamax',5,'1000-2000','PKO',false,0,1),
+      mk(74,'2026-03-15','G7','PMU',5,'1000-2000','MKO',false,0,1),
+      mk(75,'2026-03-15','G7','Betclic',5,'2000+','PKO',false,2.81,2),
+      mk(76,'2026-03-15','G7','Winamax',5,'500-999','VNL',true,11.34,2),
+      mk(77,'2026-03-15','G7','Winamax',5,'2000+','MKO',false,0,1),
+      mk(78,'2026-03-15','G7','Winamax',5,'2000+','SKO',true,10.5,1),
+      mk(79,'2026-03-15','G7','Winamax',5,'2000+','SKO',false,0,2),
+      mk(80,'2026-03-15','G7','Winamax',5,'500-999','PKO',true,12.81,1),
+      mk(81,'2026-03-15','G7','Winamax',5,'1000-2000','SKO',false,4,1),
+      mk(82,'2026-03-15','G7','Winamax',5,'500-999','PKO',false,1.13,1),
+      mk(83,'2026-03-17','G8','PMU',5,'2000+','PKO',false,0,1),
+      mk(84,'2026-03-17','G8','Betclic',5,'1000-2000','PKO',false,0,2),
+      mk(85,'2026-03-17','G8','Winamax',5,'1000-2000','PKO',false,0,2),
+      mk(86,'2026-03-17','G8','Winamax',5,'2000+','SKO',true,14.25,1),
+      mk(87,'2026-03-17','G8','Winamax',5,'2000+','SKO',false,0.5,1),
+      mk(88,'2026-03-17','G8','Winamax',5,'1000-2000','PKO',false,1.13,2),
+      mk(89,'2026-03-17','G8','PMU',5,'1000-2000','PKO',true,14.6,1),
+      mk(90,'2026-03-17','G8','Betclic',5,'2000+','PKO',false,0,2),
+      mk(91,'2026-03-17','G8','Winamax',5,'500-999','VNL',false,0,1),
+      mk(92,'2026-03-17','G8','Winamax',5,'2000+','MKO',false,0,1),
+      mk(93,'2026-03-17','G8','Winamax',2,'2000+','PKO',false,0.44,1),
+      mk(94,'2026-03-17','G8','Winamax',5,'2000+','SKO',true,35.89,2),
+      mk(95,'2026-03-17','G8','Winamax',5,'500-999','PKO',false,0,1),
+      mk(96,'2026-03-17','G8','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(97,'2026-03-17','G8','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(98,'2026-03-17','G8','Winamax',5,'1000-2000','SKO',false,0,2),
+      mk(99,'2026-03-18','G9','PMU',5,'150-499','PKO',false,2.82,2),
+      mk(100,'2026-03-18','G9','Betclic',5,'1000-2000','PKO',false,0,1),
+      mk(101,'2026-03-18','G9','Winamax',5,'1000-2000','PKO',true,6.14,1),
+      mk(102,'2026-03-18','G9','Betclic',3,'150-499','VNL',false,0,1),
+      mk(103,'2026-03-18','G9','Winamax',5,'2000+','SKO',false,1,1),
+      mk(104,'2026-03-18','G9','Winamax',5,'2000+','SKO',false,1.25,1),
+      mk(105,'2026-03-18','G9','Winamax',5,'1000-2000','PKO',true,6.13,2),
+      mk(106,'2026-03-18','G9','PMU',5,'500-999','PKO',false,0,1),
+      mk(107,'2026-03-18','G9','Betclic',5,'2000+','PKO',false,0,2),
+      mk(108,'2026-03-18','G9','Winamax',5,'500-999','VNL',false,0,1),
+      mk(109,'2026-03-18','G9','Winamax',5,'2000+','MKO',false,0,1),
+      mk(110,'2026-03-18','G9','Winamax',5,'2000+','SKO',false,0.5,2),
+      mk(111,'2026-03-18','G9','Winamax',5,'500-999','PKO',true,23.86,1),
+      mk(112,'2026-03-18','G9','Winamax',5,'2000+','MKO',true,7.22,1),
+      mk(113,'2026-03-18','G9','Winamax',5,'2000+','SKO',true,7.39,2),
+      mk(114,'2026-03-18','G9','Winamax',5,'1000-2000','SKO',false,0.4,1),
+      mk(115,'2026-03-19','G10','Winamax',5,'0-149','VNL',false,0,1),
+      mk(116,'2026-03-19','G10','Winamax',5,'500-999','SKO',true,11.52,1),
+      mk(117,'2026-03-19','G10','Betclic',1,'150-499','PKO',false,0.57,1),
+      mk(118,'2026-03-19','G10','Winamax',5,'0-149','MKO',false,0,1),
+      mk(119,'2026-03-19','G10','PMU',5,'0-149','PKO',true,6.3,1),
+      mk(120,'2026-03-19','G10','Betclic',5,'0-149','VNL',true,11.31,1),
+      mk(121,'2026-03-19','G10','Winamax',5,'1000-2000','SKO',false,0,2),
+      mk(122,'2026-03-20','G11','PMU',5,'150-499','PKO',false,0,1),
+      mk(123,'2026-03-20','G11','Betclic',5,'1000-2000','PKO',true,55.01,1),
+      mk(124,'2026-03-20','G11','Winamax',5,'1000-2000','PKO',true,11.76,1),
+      mk(125,'2026-03-20','G11','Winamax',5,'2000+','SKO',false,0,2),
+      mk(126,'2026-03-20','G11','Winamax',5,'1000-2000','PKO',true,369.77,1),
+      mk(127,'2026-03-21','G12','Winamax',5,'0-149','VNL',false,0,2),
+      mk(128,'2026-03-21','G12','Betclic',5,'0-149','PKO',false,1.13,1),
+      mk(129,'2026-03-21','G12','Winamax',5,'500-999','SKO',false,3,1),
+      mk(130,'2026-03-21','G12','Winamax',5,'0-149','MKO',true,8.82,1),
+      mk(131,'2026-03-21','G12','PMU',5,'0-149','PKO',false,1.13,1),
+      mk(132,'2026-03-21','G12','Betclic',5,'0-149','VNL',false,0,1),
+      mk(133,'2026-03-21','G12','Winamax',5,'1000-2000','SKO',true,53.17,1),
+      mk(134,'2026-03-21','G12','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(135,'2026-03-21','G12','Winamax',5,'0-149','MKO',false,0,1),
+      mk(136,'2026-03-21','G12','PMU',5,'0-149','PKO',false,0,1),
+      mk(137,'2026-03-21','G12','Betclic',5,'0-149','PKO',false,0,1),
+      mk(138,'2026-03-21','G12','Winamax',5,'0-149','VNL',false,0,2),
+      mk(139,'2026-03-21','G12','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(140,'2026-03-22','G13','PMU',5,'150-499','PKO',false,0.85,2),
+      mk(141,'2026-03-22','G13','Betclic',3,'1000-2000','PKO',true,9.68,2),
+      mk(142,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,0,1),
+      mk(143,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,0,1),
+      mk(144,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,0,1),
+      mk(145,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,2.5,1),
+      mk(146,'2026-03-22','G13','Betclic',5,'500-999','PKO',false,3.66,2),
+      mk(147,'2026-03-22','G13','Winamax',5,'1000-2000','PKO',true,22.74,1),
+      mk(148,'2026-03-22','G13','PMU',5,'500-999','PKO',false,0,1),
+      mk(149,'2026-03-22','G13','Betclic',5,'500-999','PKO',false,0,1),
+      mk(150,'2026-03-22','G13','Winamax',5,'2000+','MKO',true,7.51,2),
+      mk(151,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,0,1),
+      mk(152,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,0,1),
+      mk(153,'2026-03-22','G13','Winamax',5,'500-999','PKO',false,1.13,1),
+      mk(154,'2026-03-22','G13','Winamax',5,'1000-2000','SKO',false,0,2),
+      mk(155,'2026-03-22','G13','Winamax',5,'2000+','SKO',false,2.5,2),
+      mk(156,'2026-03-24','G14','Winamax',5,'500-999','SKO',true,20.52,2),
+      mk(157,'2026-03-24','G14','Winamax',5,'0-149','MKO',false,0,2),
+      mk(158,'2026-03-24','G14','Winamax',5,'1000-2000','SKO',false,0,2),
+      mk(159,'2026-03-24','G14','Winamax',5,'1000-2000','SKO',false,0,2),
+      mk(160,'2026-03-24','G14','Betclic',5,'0-149','PKO',false,1.6,2),
+      mk(161,'2026-03-24','G14','Betclic',10,'150-499','SKO',false,0,2),
+      mk(162,'2026-03-24','G14','Winamax',5,'0-149','VNL',false,0,1),
+      mk(163,'2026-03-24','G14','Winamax',5,'1000-2000','SKO',false,0,2),
+      mk(164,'2026-03-24','G14','Winamax',5,'0-149','VNL',false,0,1),
+      mk(165,'2026-03-24','G14','Winamax',5,'500-999','PKO',false,2.26,1),
+      mk(166,'2026-03-24','G14','Betclic',5,'150-499','PKO',false,0,1),
+      mk(167,'2026-03-24','G14','Betclic',3,'150-499','SKO',true,3.47,2),
+      mk(168,'2026-03-25','G15','Winamax',5,'0-149','VNL',false,0,1),
+      mk(169,'2026-03-25','G15','Betclic',5,'0-149','PKO',true,8.96,1),
+      mk(170,'2026-03-25','G15','Winamax',5,'500-999','SKO',true,9.31,1),
+      mk(171,'2026-03-25','G15','Winamax',5,'0-149','MKO',false,0,1),
+      mk(172,'2026-03-25','G15','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(173,'2026-03-25','G15','PMU',5,'0-149','PKO',false,0,1),
+      mk(174,'2026-03-25','G15','Betclic',5,'0-149','SKO',false,3.6,1),
+      mk(175,'2026-03-25','G15','Winamax',5,'1000-2000','SKO',false,6.85,1),
+      mk(176,'2026-03-25','G15','Winamax',5,'1000-2000','SKO',false,1.25,1),
+      mk(177,'2026-03-26','G16','PMU',5,'150-499','PKO',false,3.39,2),
+      mk(178,'2026-03-26','G16','Betclic',5,'1000-2000','PKO',true,162.65,1),
+      mk(179,'2026-03-26','G16','Winamax',5,'1000-2000','PKO',false,1.13,1),
+      mk(180,'2026-03-26','G16','Winamax',5,'2000+','SKO',true,13.66,1),
+      mk(181,'2026-03-26','G16','Winamax',5,'1000-2000','PKO',false,1.13,1),
+      mk(182,'2026-03-26','G16','Betclic',5,'500-999','PKO',false,0,1),
+      mk(183,'2026-03-26','G16','Winamax',5,'2000+','SKO',false,0,1),
+      mk(184,'2026-03-26','G16','Winamax',5,'500-999','PKO',false,0,1),
+      mk(185,'2026-03-26','G16','Winamax',5,'1000-2000','SKO',false,6.44,1),
+      mk(186,'2026-03-27','G17','Winamax',5,'1000-2000','SKO',true,251.24,2),
+      mk(187,'2026-03-27','G17','Winamax',5,'0-149','MKO',false,0,1),
+      mk(188,'2026-03-27','G17','PMU',5,'0-149','PKO',true,14.58,1),
+      mk(189,'2026-03-27','G17','Betclic',5,'150-499','SKO',true,27.85,1),
+      mk(190,'2026-03-27','G17','Winamax',5,'0-149','VNL',false,0,2),
+      mk(191,'2026-03-27','G17','Winamax',5,'1000-2000','SKO',false,0.5,1),
+      mk(192,'2026-03-30','G18','Betclic',5,'1000-2000','PKO',false,2.82,1),
+      mk(193,'2026-03-30','G18','Winamax',5,'1000-2000','PKO',false,2.26,1),
+      mk(194,'2026-03-30','G18','Winamax',5,'2000+','SKO',false,3.75,1),
+      mk(195,'2026-03-30','G18','Winamax',10,'2000+','SKO',false,1,2),
+      mk(196,'2026-03-30','G18','Winamax',10,'2000+','SKO',false,0,2),
+      mk(197,'2026-03-30','G18','Winamax',5,'1000-2000','PKO',false,1.13,1),
+      mk(198,'2026-03-30','G18','Winamax',5,'500-999','VNL',false,0,1),
+      mk(199,'2026-03-30','G18','Winamax',5,'2000+','MKO',false,0,1),
+      mk(200,'2026-03-30','G18','Winamax',10,'2000+','SKO',false,5,1),
+      mk(201,'2026-03-30','G18','Winamax',5,'2000+','SKO',true,89.83,1),
+      mk(202,'2026-03-30','G18','Winamax',5,'1000-2000','PKO',false,1.13,1),
+      mk(203,'2026-03-30','G18','Winamax',5,'500-999','PKO',false,0,1),
+      mk(204,'2026-03-30','G18','Winamax',10,'2000+','SKO',true,38.26,1),
+      mk(205,'2026-03-30','G18','Winamax',5,'1000-2000','SKO',true,58.54,1),
+      mk(206,'2026-04-01','G19','Live',150,'0-149','VNL',true,990,1),
+      mk(207,'2026-04-03','G20','Betclic',10,'0-149','PKO',false,0,2),
+      mk(208,'2026-04-03','G20','PMU',10,'0-149','PKO',false,0,1),
+      mk(209,'2026-04-03','G20','Winamax',10,'0-149','PKO',false,0,1),
+      mk(210,'2026-04-03','G20','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(211,'2026-04-03','G20','Betclic',5,'150-499','SKO',true,6.9,1),
+      mk(212,'2026-04-03','G20','Winamax',5,'0-149','VNL',false,0,1),
+      mk(213,'2026-04-03','G20','PMU',20,'0-149','PKO',false,0,1),
+      mk(214,'2026-04-03','G20','Betclic',10,'0-149','SKO',false,0,1),
+      mk(215,'2026-04-03','G20','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(216,'2026-04-03','G20','PMU',10,'0-149','PKO',true,27.28,1),
+      mk(217,'2026-04-03','G20','Winamax',10,'500-999','SKO',false,6,1),
+      mk(218,'2026-04-03','G20','Betclic',20,'0-149','SKO',false,0,1),
+      mk(219,'2026-04-03','G20','Winamax',5,'500-999','PKO',false,1.13,2),
+      mk(220,'2026-04-06','G21','Winamax',2,'2000+','MKO',false,0,1),
+      mk(221,'2026-04-06','G21','Winamax',2,'2000+','SKO',false,0,1),
+      mk(222,'2026-04-06','G21','Winamax',2,'2000+','SKO',false,0,2),
+      mk(223,'2026-04-06','G21','Winamax',5,'2000+','MKO',false,0,1),
+      mk(224,'2026-04-06','G21','Winamax',5,'2000+','SKO',false,0.5,1),
+      mk(225,'2026-04-06','G21','Winamax',5,'2000+','SKO',true,6.39,1),
+      mk(226,'2026-04-06','G21','Winamax',10,'2000+','VNL',false,0,1),
+      mk(227,'2026-04-06','G21','Winamax',10,'2000+','MKO',false,0,1),
+      mk(228,'2026-04-06','G21','Winamax',10,'2000+','MKO',false,0,1),
+      mk(229,'2026-04-06','G21','Winamax',10,'2000+','SKO',false,11.5,1),
+      mk(230,'2026-04-06','G21','Winamax',10,'2000+','SKO',false,0,2),
+      mk(231,'2026-04-06','G21','Winamax',20,'2000+','SKO',false,0,1),
+      mk(232,'2026-04-06','G21','Winamax',20,'2000+','SKO',false,0,1),
+      mk(233,'2026-04-06','G21','Winamax',20,'2000+','SKO',false,32,1),
+      mk(234,'2026-04-07','G22','Winamax',1,'2000+','SKO',false,0,2),
+      mk(235,'2026-04-07','G22','Winamax',2,'2000+','SKO',false,0.2,1),
+      mk(236,'2026-04-07','G22','Winamax',2,'2000+','SKO',false,1.2,1),
+      mk(237,'2026-04-07','G22','Winamax',5,'2000+','SKO',false,1,1),
+      mk(238,'2026-04-07','G22','Winamax',5,'2000+','SKO',false,0,1),
+      mk(239,'2026-04-07','G22','Winamax',5,'2000+','SKO',true,19.24,1),
+      mk(240,'2026-04-07','G22','Winamax',5,'2000+','SKO',false,0.5,1),
+      mk(241,'2026-04-07','G22','Winamax',5,'2000+','MKO',false,0,1),
+      mk(242,'2026-04-07','G22','Winamax',10,'2000+','MKO',false,0,1),
+      mk(243,'2026-04-07','G22','Winamax',10,'2000+','SKO',false,0,2),
+      mk(244,'2026-04-07','G22','Winamax',10,'2000+','SKO',false,0,2),
+      mk(245,'2026-04-07','G22','Winamax',20,'2000+','SKO',false,0,1),
+      mk(246,'2026-04-07','G22','Winamax',20,'2000+','SKO',false,0,2),
+      mk(247,'2026-04-07','G22','Winamax',50,'2000+','SKO',false,31.5,1),
+      mk(248,'2026-04-09','G23','Winamax',2,'2000+','SKO',false,2.34,2),
+      mk(249,'2026-04-09','G23','Winamax',5,'2000+','SKO',false,0.5,3),
+      mk(250,'2026-04-09','G23','Winamax',5,'2000+','PKO',false,1.13,1),
+      mk(251,'2026-04-09','G23','Winamax',10,'2000+','SKO',false,0,2),
+      mk(252,'2026-04-09','G23','Winamax',10,'2000+','SKO',true,38.09,1),
+      mk(253,'2026-04-09','G23','Winamax',20,'2000+','SKO',false,2,1),
+      mk(254,'2026-04-10','G24','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(255,'2026-04-10','G24','PMU',10,'0-149','PKO',false,1.13,1),
+      mk(256,'2026-04-10','G24','Winamax',10,'500-999','SKO',false,0,1),
+      mk(257,'2026-04-10','G24','Betclic',20,'0-149','SKO',false,10,1),
+      mk(258,'2026-04-10','G24','Winamax',5,'500-999','PKO',false,1.13,2),
+      mk(259,'2026-04-10','G24','Betclic',10,'0-149','SKO',false,0,1),
+      mk(260,'2026-04-10','G24','Winamax',5,'2000+','SKO',false,1.75,2),
+      mk(261,'2026-04-10','G24','Winamax',2,'2000+','SKO',true,11.65,1),
+      mk(262,'2026-04-12','G25','Winamax',2,'2000+','SKO',false,0,1),
+      mk(263,'2026-04-12','G25','Winamax',2,'2000+','SKO',false,0,1),
+      mk(264,'2026-04-12','G25','Winamax',2,'2000+','SKO',false,0,1),
+      mk(265,'2026-04-12','G25','Winamax',5,'2000+','SKO',false,0.5,2),
+      mk(266,'2026-04-12','G25','Winamax',5,'2000+','PKO',false,0,1),
+      mk(267,'2026-04-12','G25','Winamax',5,'2000+','SKO',false,0,1),
+      mk(268,'2026-04-12','G25','Winamax',10,'2000+','SKO',false,10.5,2),
+      mk(269,'2026-04-12','G25','Winamax',10,'2000+','SKO',false,2,1),
+      mk(270,'2026-04-12','G25','Winamax',10,'2000+','SKO',false,0,1),
+      mk(271,'2026-04-12','G25','Winamax',20,'2000+','SKO',false,10.56,1),
+      mk(272,'2026-04-12','G25','Winamax',20,'2000+','SKO',false,0,1),
+      mk(273,'2026-04-12','G25','Winamax',20,'2000+','MKO',false,0,1),
+      mk(274,'2026-04-12','G25','Winamax',10,'2000+','SKO',false,0,1),
+      mk(275,'2026-04-12','G25','Winamax',20,'2000+','SKO',false,14,1),
+      mk(276,'2026-04-13','G26','Betclic',5,'150-499','SKO',true,51.7,1),
+      mk(277,'2026-04-13','G26','Winamax',5,'0-149','VNL',false,0,1),
+      mk(278,'2026-04-13','G26','PMU',20,'0-149','PKO',false,0,1),
+      mk(279,'2026-04-13','G26','Betclic',10,'0-149','SKO',true,48.33,1),
+      mk(280,'2026-04-13','G26','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(281,'2026-04-13','G26','PMU',10,'0-149','PKO',false,0,1),
+      mk(282,'2026-04-13','G26','Winamax',10,'500-999','SKO',false,1.6,1),
+      mk(283,'2026-04-13','G26','Betclic',20,'0-149','SKO',false,4,1),
+      mk(284,'2026-04-13','G26','Winamax',5,'2000+','SKO',false,0,3),
+      mk(285,'2026-04-13','G26','Winamax',2,'2000+','SKO',false,0,2),
+      mk(286,'2026-04-13','G26','Winamax',20,'2000+','SKO',false,0,2),
+      mk(287,'2026-04-14','G27','Winamax',20,'150-499','SKO',false,0,1),
+      mk(288,'2026-04-14','G27','Betclic',5,'150-499','SKO',false,0,1),
+      mk(289,'2026-04-14','G27','PMU',20,'0-149','PKO',false,0,1),
+      mk(290,'2026-04-14','G27','Winamax',5,'2000+','SKO',false,0.5,1),
+      mk(291,'2026-04-14','G27','Winamax',2,'2000+','SKO',false,0,3),
+      mk(292,'2026-04-14','G27','Winamax',20,'2000+','SKO',false,11,1),
+      mk(293,'2026-04-14','G27','Betclic',20,'0-149','SKO',false,9,1),
+      mk(294,'2026-04-14','G27','Winamax',5,'500-999','PKO',false,0,1),
+      mk(295,'2026-04-15','G28','Winamax',20,'150-499','SKO',false,0,1),
+      mk(296,'2026-04-15','G28','Betclic',5,'150-499','SKO',false,4.5,1),
+      mk(297,'2026-04-15','G28','PMU',20,'0-149','PKO',false,0,1),
+      mk(298,'2026-04-15','G28','Winamax',2,'2000+','SKO',false,0.5,2),
+      mk(299,'2026-04-15','G28','Winamax',20,'2000+','SKO',false,0,2),
+      mk(300,'2026-04-15','G28','Winamax',5,'1000-2000','SKO',false,0,1),
+      mk(301,'2026-04-15','G28','Winamax',10,'2000+','SKO',false,3.5,1),
+      mk(302,'2026-04-15','G29','Winamax',5,'2000+','SKO',true,127.07,1),
+      mk(303,'2026-04-15','G29','Winamax',1,'2000+','SKO',true,3.8,2),
+      mk(304,'2026-04-15','G29','Winamax',20,'2000+','SKO',true,85.26,1),
+      mk(305,'2026-04-15','G29','Winamax',20,'2000+','SKO',false,0,1),
+      mk(306,'2026-04-16','G30','PMU',10,'0-149','PKO',false,0,1),
+      mk(307,'2026-04-16','G30','Betclic',20,'0-149','SKO',false,0,2),
+      mk(308,'2026-04-16','G30','Betclic',1,'0-149','SKO',false,0,1),
+      mk(309,'2026-04-16','G30','Winamax',10,'2000+','SKO',false,1,1),
+      mk(310,'2026-04-16','G30','Winamax',10,'500-999','SKO',false,11.5,1),
+      mk(311,'2026-04-16','G30','Winamax',10,'0-149','PKO',false,2.25,1),
+      mk(312,'2026-04-16','G31','Betclic',10,'150-499','SKO',true,19.68,2),
+      mk(313,'2026-04-16','G31','PMU',10,'150-499','PKO',true,31.13,1),
+      mk(314,'2026-04-16','G31','Winamax',10,'2000+','SKO',false,1.2,1),
+      mk(315,'2026-04-16','G31','Winamax',5,'1000-2000','PKO',false,0,2),
+      mk(316,'2026-04-16','G31','Betclic',10,'0-149','VNL',false,0,1),
+      mk(317,'2026-04-16','G31','Betclic',20,'150-499','SKO',false,5,1),
+      mk(318,'2026-04-16','G31','Winamax',2,'2000+','SKO',true,8.29,1),
+      mk(319,'2026-04-16','G31','Winamax',5,'2000+','MKO',false,0,1),
+    ];
+
+    // ─── ATOMS ────────────────────────────────────────────────────
+    const Badge = ({ cls, children }) => (
+      <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>{children}</span>
+    );
+
+    const Cb = ({ checked, onChange }) => (
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)}
+        className="w-4 h-4 cursor-pointer" style={{ accentColor: '#22c55e' }} />
+    );
+
+    const Inp = ({ value, onChange, type='text', placeholder='', cls='' }) => (
+      <input type={type} value={value} onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500 ${cls}`} />
+    );
+
+    const Sel = ({ value, onChange, options, cls='' }) => (
+      <select value={value} onChange={e => onChange(e.target.value)}
+        className={`bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500 ${cls}`}>
+        {options.map(o => (
+          <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
+        ))}
+      </select>
+    );
+
+    const Btn = ({ onClick, children, cls='', disabled=false }) => (
+      <button onClick={onClick} disabled={disabled}
+        className={`px-3 py-1.5 rounded text-sm font-medium transition-colors disabled:opacity-40 ${cls}`}>
+        {children}
+      </button>
+    );
+
+    const Toggle = ({ value, onChange }) => (
+      <button onClick={() => onChange(!value)}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${value ? 'bg-green-600' : 'bg-gray-600'}`}>
+        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${value ? 'translate-x-6' : 'translate-x-1'}`} />
+      </button>
+    );
+
+    // ─── TAB 1 — GRILLES PRÉ-ENREGISTRÉES ────────────────────────
+    const EMPTY_TOURN = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO', priority:'Niv 1', entardive:'' };
+    const SESS_CLS = { Matin:'bg-yellow-600 text-white', Jour:'bg-sky-600 text-white', Soir:'bg-indigo-600 text-white' };
+
+    function GridsTab({ savedGrids, setSavedGrids }) {
+      const [showCreate, setShowCreate]   = useState(false);
+      const [gridForm, setGridForm]       = useState({ name:'', sessionType:'Soir' });
+      const [editGridId, setEditGridId]   = useState(null);
+      const [expandedId, setExpandedId]   = useState(null);
+      const [addTournFor, setAddTournFor] = useState(null); // gridId
+      const [tournForm, setTournForm]     = useState(EMPTY_TOURN);
+      const [editTourn, setEditTourn]     = useState(null); // { gridId, tournId }
+
+      const gset = k => v => setGridForm(f => ({ ...f, [k]: v }));
+      const tset = k => v => setTournForm(f => ({ ...f, [k]: v }));
+
+      // ── Grid CRUD ──
+      const saveGrid = () => {
+        if (!gridForm.name.trim()) return;
+        if (editGridId !== null) {
+          setSavedGrids(gs => gs.map(g => g.id === editGridId ? { ...g, ...gridForm } : g));
+        } else {
+          setSavedGrids(gs => [...gs, { id: uid(), ...gridForm, tournaments: [] }]);
+          setExpandedId(null);
+        }
+        setGridForm({ name:'', sessionType:'Soir' }); setEditGridId(null); setShowCreate(false);
+      };
+
+      const startEditGrid = (e, g) => {
+        e.stopPropagation();
+        setGridForm({ name: g.name, sessionType: g.sessionType });
+        setEditGridId(g.id); setShowCreate(true);
+      };
+
+      const deleteGrid = (e, id) => {
+        e.stopPropagation();
+        if (confirm('Supprimer cette grille et tous ses tournois ?'))
+          setSavedGrids(gs => gs.filter(g => g.id !== id));
+      };
+
+      // ── Tournament CRUD inside a grid ──
+      const saveTournament = gridId => {
+        if (!tournForm.name.trim()) return;
+        const tourn = { ...tournForm, buyIn: Number(tournForm.buyIn), entardive: Number(tournForm.entardive) || 0 };
+        if (editTourn && editTourn.gridId === gridId) {
+          setSavedGrids(gs => gs.map(g => g.id === gridId
+            ? { ...g, tournaments: g.tournaments.map(t => t.id === editTourn.tournId ? { ...tourn, id: editTourn.tournId } : t) }
+            : g));
+          setEditTourn(null);
+        } else {
+          setSavedGrids(gs => gs.map(g => g.id === gridId
+            ? { ...g, tournaments: [...g.tournaments, { ...tourn, id: uid() }] }
+            : g));
+        }
+        setTournForm(EMPTY_TOURN); setAddTournFor(null);
+      };
+
+      const startEditTourn = (gridId, t) => {
+        setTournForm({ name:t.name, room:t.room, startTime:t.startTime, buyIn:t.buyIn, field:t.field, format:t.format, priority:t.priority, entardive:t.entardive });
+        setEditTourn({ gridId, tournId: t.id });
+        setAddTournFor(gridId);
+      };
+
+      const deleteTourn = (gridId, tournId) => {
+        setSavedGrids(gs => gs.map(g => g.id === gridId
+          ? { ...g, tournaments: g.tournaments.filter(t => t.id !== tournId) }
+          : g));
+      };
+
+      const cancelTournForm = () => { setTournForm(EMPTY_TOURN); setAddTournFor(null); setEditTourn(null); };
+
+      return (
+        <div className="p-4 space-y-4">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-green-400">Grilles pré-enregistrées — {savedGrids.length}</h2>
+            {!showCreate && (
+              <Btn onClick={() => { setGridForm({ name:'', sessionType:'Soir' }); setEditGridId(null); setShowCreate(true); }}
+                cls="bg-green-600 hover:bg-green-700 text-white">+ Créer une grille</Btn>
+            )}
+          </div>
+
+          {/* Create / Edit grid form */}
+          {showCreate && (
+            <div className="bg-gray-800 border border-green-800 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-green-400 mb-3">{editGridId ? '✏️ Modifier la grille' : '➕ Nouvelle grille'}</h3>
+              <div className="flex flex-wrap gap-3">
+                <div className="flex-1 min-w-48">
+                  <label className="text-xs text-gray-400 block mb-1">Nom de la grille *</label>
+                  <Inp value={gridForm.name} onChange={gset('name')} placeholder="Ex: Soirée PKO, Après-midi..." cls="w-full" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Type de session</label>
+                  <Sel value={gridForm.sessionType} onChange={gset('sessionType')} options={SESSION_TYPES} cls="w-full" />
+                </div>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <Btn onClick={saveGrid} cls="bg-green-600 hover:bg-green-700 text-white">Sauvegarder</Btn>
+                <Btn onClick={() => { setShowCreate(false); setEditGridId(null); }} cls="bg-gray-600 hover:bg-gray-700 text-white">Annuler</Btn>
+              </div>
+            </div>
+          )}
+
+          {/* Grid cards */}
+          {savedGrids.length === 0 && (
+            <div className="text-center py-16 text-gray-600">
+              <div className="text-5xl mb-3">📋</div>
+              <p className="text-sm">Aucune grille. Créez-en une pour commencer.</p>
+            </div>
+          )}
+
+          {savedGrids.map(grid => {
+            const isOpen = expandedId === grid.id;
+            const isAddingHere = addTournFor === grid.id;
+            return (
+              <div key={grid.id} className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+                {/* Card header — clickable to expand */}
+                <div className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-750 transition-colors select-none"
+                  onClick={() => setExpandedId(isOpen ? null : grid.id)}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-white font-semibold">{grid.name}</span>
+                    <Badge cls={SESS_CLS[grid.sessionType] || 'bg-gray-600 text-white'}>{grid.sessionType}</Badge>
+                    <span className="text-gray-500 text-xs">{grid.tournaments.length} tournoi{grid.tournaments.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={e => startEditGrid(e, grid)} className="text-blue-400 hover:text-blue-200 text-sm" title="Renommer">✏️</button>
+                    <button onClick={e => deleteGrid(e, grid.id)} className="text-red-400 hover:text-red-200 text-sm" title="Supprimer">🗑️</button>
+                    <span className="text-gray-500 text-xs ml-1">{isOpen ? '▲' : '▼'}</span>
+                  </div>
+                </div>
+
+                {/* Expanded content */}
+                {isOpen && (
+                  <div className="border-t border-gray-700">
+                    {/* Tournament table */}
+                    {grid.tournaments.length > 0 && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                          <thead className="bg-gray-900 text-gray-400 text-xs uppercase">
+                            <tr>
+                              {['Nom','Room','Heure','Buy-In','Field','Format','Priorité','EnTardive',''].map(h => (
+                                <th key={h} className="px-3 py-2 whitespace-nowrap">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {grid.tournaments.map(t => (
+                              <tr key={t.id} className="border-t border-gray-700 hover:bg-gray-700/40 transition-colors">
+                                <td className="px-3 py-2 font-medium text-white">{t.name}</td>
+                                <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
+                                <td className="px-3 py-2 text-gray-300">{t.startTime}</td>
+                                <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
+                                <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
+                                <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
+                                <td className="px-3 py-2"><Badge cls={PRIO_CLS[t.priority]}>{t.priority}</Badge></td>
+                                <td className="px-3 py-2 text-gray-400 text-xs">{t.entardive || '—'}</td>
+                                <td className="px-3 py-2">
+                                  <div className="flex gap-2">
+                                    <button onClick={() => startEditTourn(grid.id, t)} className="text-blue-400 hover:text-blue-200 text-sm">✏️</button>
+                                    <button onClick={() => deleteTourn(grid.id, t.id)} className="text-red-400 hover:text-red-200 text-sm">🗑️</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {grid.tournaments.length === 0 && !isAddingHere && (
+                      <p className="text-xs text-gray-600 px-4 py-3">Aucun tournoi dans cette grille.</p>
+                    )}
+
+                    {/* Add / Edit tournament form */}
+                    {isAddingHere && (
+                      <div className="bg-gray-900/60 border-t border-gray-700 px-4 py-3">
+                        <p className="text-xs font-semibold text-green-400 mb-2">{editTourn ? '✏️ Modifier le tournoi' : '➕ Ajouter un tournoi'}</p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                          <div className="col-span-2">
+                            <label className="text-xs text-gray-500 block mb-0.5">Nom *</label>
+                            <Inp value={tournForm.name} onChange={tset('name')} placeholder="Nom du tournoi" cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">Room</label>
+                            <Sel value={tournForm.room} onChange={tset('room')} options={ROOMS} cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">Heure</label>
+                            <Inp type="time" value={tournForm.startTime} onChange={tset('startTime')} cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">Buy-In</label>
+                            <Sel value={tournForm.buyIn} onChange={tset('buyIn')} options={BUY_INS.map(b => ({ value:b, label:`${b}€` }))} cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">Field</label>
+                            <Sel value={tournForm.field} onChange={tset('field')} options={FIELDS} cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">Format</label>
+                            <Sel value={tournForm.format} onChange={tset('format')} options={FORMATS} cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">Priorité</label>
+                            <Sel value={tournForm.priority} onChange={tset('priority')} options={PRIORITIES} cls="w-full" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 block mb-0.5">EnTardive</label>
+                            <Inp type="number" value={tournForm.entardive} onChange={tset('entardive')} placeholder="22.5" cls="w-full" />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 mt-2">
+                          <Btn onClick={() => saveTournament(grid.id)} cls="bg-green-600 hover:bg-green-700 text-white text-xs">
+                            {editTourn ? 'Modifier' : 'Ajouter'}
+                          </Btn>
+                          <Btn onClick={cancelTournForm} cls="bg-gray-600 hover:bg-gray-700 text-white text-xs">Annuler</Btn>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Footer actions */}
+                    {!isAddingHere && (
+                      <div className="px-4 py-2 border-t border-gray-700/50">
+                        <Btn onClick={() => { setTournForm(EMPTY_TOURN); setEditTourn(null); setAddTournFor(grid.id); }}
+                          cls="bg-gray-700 hover:bg-gray-600 text-green-400 text-xs">+ Ajouter un tournoi</Btn>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ─── TAB 2 — GRILLE DU JOUR ───────────────────────────────────
+    const EMPTY_PONCT = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO', priority:'Niv 1', entardive:'' };
+
+    function DailyGridTab({ savedGrids, setPlayedTournaments, sessions, setSessions }) {
+      const [date, setDate]           = useState(todayStr);
+      const [typeSession, setTypeSession] = useState('Soir');
+      const [selectedGridId, setSelId] = useState('');
+      const [rows, setRows]           = useState([]);
+      const [generated, setGen]       = useState(false);
+      const [showPonct, setShowP]     = useState(false);
+      const [ponct, setPonct]         = useState(EMPTY_PONCT);
+      const [validated, setVal]       = useState(false);
+      const dragIdx = useRef(null);
+
+      const loadGrid = () => {
+        const grid = savedGrids.find(g => g.id === Number(selectedGridId));
+        const source = grid ? grid.tournaments : [];
+        setRows(source.map(t => ({
+          _gid: uid(), libId: t.id, name: t.name, room: t.room,
+          startTime: t.startTime, buyIn: t.buyIn, field: t.field,
+          format: t.format, priority: t.priority, entardive: t.entardive,
+          favorite: false, entry: false, reEntry: false, itm: false, gains: 0,
+        })));
+        setGen(true); setVal(false);
+      };
+
+      const upd = (gid, k, v) => setRows(r => r.map(x => x._gid === gid ? { ...x, [k]: v } : x));
+      const del  = gid => setRows(r => r.filter(x => x._gid !== gid));
+      const pSet = k => v => setPonct(f => ({ ...f, [k]: v }));
+
+      const addPonct = () => {
+        if (!ponct.name.trim()) return;
+        setRows(r => [...r, {
+          _gid: uid(), libId: null, ...ponct,
+          buyIn: Number(ponct.buyIn), entardive: Number(ponct.entardive) || 0,
+          favorite: false, entry: false, reEntry: false, itm: false, gains: 0,
+        }]);
+        setPonct(EMPTY_PONCT); setShowP(false);
+      };
+
+      const validate = () => {
+        const played = rows.filter(r => r.entry);
+        if (!played.length) { alert('Aucun tournoi coché (Entry).'); return; }
+
+        // Trouve ou crée la session Grind pour cette date + typeSession
+        let sess = sessions.find(s => s.date === date && s.type === 'Grind' && s.typeSession === typeSession);
+        if (!sess) {
+          const grindSessions = sessions.filter(s => s.type === 'Grind');
+          const lastNum = grindSessions.reduce((max, s) => {
+            const n = parseInt(s.code.replace('G', ''), 10);
+            return isNaN(n) ? max : Math.max(max, n);
+          }, 0);
+          sess = {
+            id: uid(),
+            code: `G${lastNum + 1}`,
+            date,
+            type: 'Grind',
+            start: '', end: '',
+            typeSession,
+            hands: 0,
+            duration: '',
+          };
+          setSessions(prev => [...prev, sess]);
+        }
+
+        setPlayedTournaments(prev => [...prev, ...played.map(r => ({
+          id: uid(), date, session: sess.code,
+          room: r.room, buyIn: r.buyIn, entry: true, reEntry: r.reEntry,
+          field: r.field, format: r.format, itm: r.itm,
+          gains: Number(r.gains), nbEntry: r.reEntry ? 2 : 1,
+          profit: Math.round((Number(r.gains) - r.buyIn * (r.reEntry ? 2 : 1)) * 100) / 100,
+        }))]);
+        setVal(true);
+      };
+
+      const onDragStart = (e, i) => { dragIdx.current = i; e.dataTransfer.effectAllowed = 'move'; };
+      const onDragOver  = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+      const onDrop      = (e, i) => {
+        e.preventDefault();
+        const from = dragIdx.current;
+        if (from === null || from === i) return;
+        setRows(r => {
+          const copy = [...r];
+          const [item] = copy.splice(from, 1);
+          copy.splice(i, 0, item);
+          return copy;
+        });
+        dragIdx.current = null;
+      };
+
+      return (
+        <div className="p-4 space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Date</p>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Moment</p>
+              <Sel value={typeSession} onChange={setTypeSession}
+                options={['Matin','Jour','Soir']} />
+            </div>
+            <div className="flex-1 min-w-48">
+              <p className="text-xs text-gray-500 mb-1">Grille pré-enregistrée</p>
+              <select value={selectedGridId} onChange={e => setSelId(e.target.value)}
+                className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500">
+                <option value="">— Grille vide —</option>
+                {savedGrids.map(g => (
+                  <option key={g.id} value={g.id}>{g.name} ({g.sessionType} · {g.tournaments.length} tournois)</option>
+                ))}
+              </select>
+            </div>
+            <Btn onClick={loadGrid} cls="bg-green-600 hover:bg-green-700 text-white font-semibold">⚡ Charger</Btn>
+            {generated && (
+              <Btn onClick={() => setShowP(v => !v)} cls="bg-gray-600 hover:bg-gray-700 text-white">+ Ajout ponctuel</Btn>
+            )}
+            {validated && <span className="text-green-400 text-sm font-semibold self-center">✓ Journée validée</span>}
+          </div>
+          {generated && (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span>📋</span>
+              <span>
+                {selectedGridId
+                  ? <>Grille <span className="text-green-400 font-medium">{savedGrids.find(g=>g.id===Number(selectedGridId))?.name}</span> chargée</>
+                  : 'Grille vide — ajoutez des tournois ponctuels'}
+              </span>
+            </div>
+          )}
+
+          {showPonct && (
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+              <p className="text-xs font-semibold text-gray-400 mb-2">Tournoi ponctuel</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                <div className="col-span-2">
+                  <Inp value={ponct.name} onChange={pSet('name')} placeholder="Nom du tournoi" cls="w-full" />
+                </div>
+                <Sel value={ponct.room} onChange={pSet('room')} options={ROOMS} cls="w-full" />
+                <Inp type="time" value={ponct.startTime} onChange={pSet('startTime')} cls="w-full" />
+                <Sel value={ponct.buyIn} onChange={pSet('buyIn')} options={BUY_INS.map(b => ({ value:b, label:`${b}€` }))} cls="w-full" />
+                <Sel value={ponct.field} onChange={pSet('field')} options={FIELDS} cls="w-full" />
+                <Sel value={ponct.format} onChange={pSet('format')} options={FORMATS} cls="w-full" />
+                <Sel value={ponct.priority} onChange={pSet('priority')} options={PRIORITIES} cls="w-full" />
+              </div>
+              <div className="flex gap-2 mt-2">
+                <Btn onClick={addPonct} cls="bg-green-600 hover:bg-green-700 text-white text-xs">Ajouter</Btn>
+                <Btn onClick={() => setShowP(false)} cls="bg-gray-600 hover:bg-gray-700 text-white text-xs">Annuler</Btn>
+              </div>
+            </div>
+          )}
+
+          {!generated ? (
+            <div className="text-center py-20 text-gray-600">
+              <div className="text-5xl mb-3">📅</div>
+              <p className="text-sm">Sélectionnez une date, choisissez une grille et cliquez sur "Charger"</p>
+              <p className="text-xs mt-1 text-gray-700">{savedGrids.length} grille{savedGrids.length !== 1 ? 's' : ''} pré-enregistrée{savedGrids.length !== 1 ? 's' : ''} disponible{savedGrids.length !== 1 ? 's' : ''}</p>
+            </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <table className="w-full text-sm text-left" style={{ minWidth: '1050px' }}>
+                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                    <tr>
+                      <th className="px-2 py-2 w-8">☆</th>
+                      <th className="px-2 py-2">Tard.</th>
+                      <th className="px-2 py-2">Prio</th>
+                      <th className="px-2 py-2">Heure</th>
+                      <th className="px-2 py-2">Tournoi</th>
+                      <th className="px-2 py-2">Room</th>
+                      <th className="px-2 py-2">BI</th>
+                      <th className="px-2 py-2 text-center">Entry</th>
+                      <th className="px-2 py-2 text-center">Re-Entry</th>
+                      <th className="px-2 py-2">Field</th>
+                      <th className="px-2 py-2">Fmt</th>
+                      <th className="px-2 py-2 text-center">ITM</th>
+                      <th className="px-2 py-2">Gains (€)</th>
+                      <th className="px-2 py-2 w-6"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={r._gid}
+                        draggable
+                        onDragStart={e => onDragStart(e, i)}
+                        onDragOver={onDragOver}
+                        onDrop={e => onDrop(e, i)}
+                        style={{ borderLeft: r.favorite ? '3px solid #facc15' : '3px solid transparent' }}
+                        className={`border-t border-gray-700 cursor-grab active:cursor-grabbing transition-colors
+                          ${r.entry ? 'bg-green-900/20' : 'hover:bg-gray-800/50'}`}>
+                        <td className="px-2 py-1.5">
+                          <button onClick={() => upd(r._gid, 'favorite', !r.favorite)}
+                            className={`text-lg leading-none transition-colors ${r.favorite ? 'text-yellow-400' : 'text-gray-700 hover:text-yellow-600'}`}>★</button>
+                        </td>
+                        <td className="px-2 py-1.5 text-gray-500 text-xs">{r.entardive || '—'}</td>
+                        <td className="px-2 py-1.5"><Badge cls={PRIO_CLS[r.priority]}>{r.priority}</Badge></td>
+                        <td className="px-2 py-1.5 text-gray-300">{r.startTime}</td>
+                        <td className="px-2 py-1.5 font-medium text-white">{r.name}</td>
+                        <td className="px-2 py-1.5"><Badge cls={ROOM_CLS[r.room]}>{r.room}</Badge></td>
+                        <td className="px-2 py-1.5 text-gray-300 whitespace-nowrap">{r.buyIn}€</td>
+                        <td className="px-2 py-1.5 text-center"><Cb checked={r.entry} onChange={v => upd(r._gid, 'entry', v)} /></td>
+                        <td className="px-2 py-1.5 text-center"><Cb checked={r.reEntry} onChange={v => upd(r._gid, 'reEntry', v)} /></td>
+                        <td className="px-2 py-1.5 text-gray-400 text-xs">{r.field}</td>
+                        <td className="px-2 py-1.5"><Badge cls={FMT_CLS[r.format]}>{r.format}</Badge></td>
+                        <td className="px-2 py-1.5 text-center"><Cb checked={r.itm} onChange={v => upd(r._gid, 'itm', v)} /></td>
+                        <td className="px-2 py-1.5">
+                          <input type="number" value={r.gains}
+                            onChange={e => upd(r._gid, 'gains', e.target.value)}
+                            className="w-20 bg-gray-700 border border-gray-600 rounded px-2 py-0.5 text-sm text-white focus:outline-none focus:border-green-500" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <button onClick={() => del(r._gid)} className="text-gray-600 hover:text-red-400 transition-colors text-sm">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-500">
+                  {rows.filter(r => r.entry).length} / {rows.length} tournois sélectionnés
+                </span>
+                <Btn onClick={validate} cls="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 text-base">
+                  ✓ Valider la journée
+                </Btn>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    // ─── TAB 3 — SESSIONS & TOURNOIS ──────────────────────────────
+    function SessionsTab({ sessions, setSessions, playedTournaments, setPlayed }) {
+      const [sub, setSub]           = useState('grind');
+      const [showForm, setShow]     = useState(false);
+      const [page, setPage]         = useState(1);
+      const [confirmDel, setConfirm] = useState(null); // session à supprimer
+      const PER_PAGE = 15;
+
+      const emptyF = { type:'Grind', date:todayStr, start:'18:00', end:'23:00', hands:0 };
+      const [form, setForm] = useState(emptyF);
+      const set = k => v => setForm(f => ({ ...f, [k]: v }));
+
+      const grindN  = sessions.filter(s => s.type === 'Grind').length;
+      const travN   = sessions.filter(s => s.type === 'Travail').length;
+
+      const save = () => {
+        const prefix = form.type === 'Grind' ? 'G' : 'T';
+        const n      = form.type === 'Grind' ? grindN + 1 : travN + 1;
+        setSessions(prev => [...prev, {
+          id: uid(), code: `${prefix}${n}`, ...form,
+          hands: Number(form.hands),
+          typeSession: typeSession(form.start),
+          duration: calcDuration(form.start, form.end),
+        }]);
+        setForm(emptyF); setShow(false);
+      };
+
+      const totalPages = Math.ceil(playedTournaments.length / PER_PAGE);
+      const pageData   = playedTournaments.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+      return (
+        <>
+        <div className="p-4 space-y-4">
+          <div className="flex gap-1 border-b border-gray-700">
+            {[['grind','Sessions Grind'],['travail','Sessions Travail'],['tournois','Tournois Joués']].map(([k,l]) => (
+              <button key={k} onClick={() => setSub(k)}
+                className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+                  ${sub===k
+                    ? k==='grind'   ? 'border-green-500 text-green-400'
+                    : k==='travail' ? 'border-blue-500 text-blue-400'
+                    :                 'border-purple-500 text-purple-400'
+                    : 'border-transparent text-gray-400 hover:text-white'}`}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Onglet Sessions Grind ── */}
+          {sub === 'grind' && (
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-300 text-sm">
+                  <span className="text-green-400 font-semibold">{sessions.filter(s=>s.type==='Grind').length}</span> sessions Grind
+                </span>
+                {!showForm && (
+                  <Btn onClick={() => { setForm({...emptyF, type:'Grind'}); setShow(true); }} cls="bg-green-600 hover:bg-green-700 text-white">+ Nouvelle session</Btn>
+                )}
+              </div>
+
+              {showForm && form.type === 'Grind' && (
+                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Date</label>
+                      <Inp type="date" value={form.date} onChange={set('date')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Début</label>
+                      <Inp type="time" value={form.start} onChange={set('start')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Fin</label>
+                      <Inp type="time" value={form.end} onChange={set('end')} cls="w-full" />
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    Durée calculée : {calcDuration(form.start, form.end)} | Moment : {typeSession(form.start)}
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <Btn onClick={save} cls="bg-green-600 hover:bg-green-700 text-white">Sauvegarder</Btn>
+                    <Btn onClick={() => setShow(false)} cls="bg-gray-600 hover:bg-gray-700 text-white">Annuler</Btn>
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                    <tr>{['ID','Date','Moment','Début','Fin','Durée',''].map(h=>(
+                      <th key={h} className="px-3 py-2 text-left">{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {[...sessions].filter(s=>s.type==='Grind').reverse().map(s=>(
+                      <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
+                        <td className="px-3 py-2 font-mono text-green-400 font-semibold">{s.code}</td>
+                        <td className="px-3 py-2 text-gray-300">{s.date}</td>
+                        <td className="px-3 py-2 text-gray-400">{s.typeSession}</td>
+                        <td className="px-3 py-2 text-gray-300">{s.start}</td>
+                        <td className="px-3 py-2 text-gray-300">{s.end}</td>
+                        <td className="px-3 py-2 text-gray-300 font-medium">{s.duration}</td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => setConfirm(s)}
+                            className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── Onglet Sessions Travail ── */}
+          {sub === 'travail' && (
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-300 text-sm">
+                  <span className="text-blue-400 font-semibold">{sessions.filter(s=>s.type==='Travail').length}</span> sessions Travail
+                </span>
+                {!showForm && (
+                  <Btn onClick={() => { setForm({...emptyF, type:'Travail'}); setShow(true); }} cls="bg-blue-600 hover:bg-blue-700 text-white">+ Nouvelle session</Btn>
+                )}
+              </div>
+
+              {showForm && form.type === 'Travail' && (
+                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Date</label>
+                      <Inp type="date" value={form.date} onChange={set('date')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Début</label>
+                      <Inp type="time" value={form.start} onChange={set('start')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Fin</label>
+                      <Inp type="time" value={form.end} onChange={set('end')} cls="w-full" />
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    Durée calculée : {calcDuration(form.start, form.end)}
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <Btn onClick={save} cls="bg-blue-600 hover:bg-blue-700 text-white">Sauvegarder</Btn>
+                    <Btn onClick={() => setShow(false)} cls="bg-gray-600 hover:bg-gray-700 text-white">Annuler</Btn>
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                    <tr>{['ID','Date','Début','Fin','Durée',''].map(h=>(
+                      <th key={h} className="px-3 py-2 text-left">{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {[...sessions].filter(s=>s.type==='Travail').reverse().map(s=>(
+                      <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
+                        <td className="px-3 py-2 font-mono text-blue-400 font-semibold">{s.code}</td>
+                        <td className="px-3 py-2 text-gray-300">{s.date}</td>
+                        <td className="px-3 py-2 text-gray-300">{s.start}</td>
+                        <td className="px-3 py-2 text-gray-300">{s.end}</td>
+                        <td className="px-3 py-2 text-gray-300 font-medium">{s.duration}</td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => setConfirm(s)}
+                            className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {sub === 'tournois' && (
+            <div className="space-y-3">
+              <span className="text-gray-300 text-sm">{playedTournaments.length} tournois enregistrés</span>
+              <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <table className="w-full text-sm" style={{ minWidth: '900px' }}>
+                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                    <tr>
+                      {['Date','Session','Room','Buy-In','Entry','Re-Entry','Field','Format','ITM','Gains','Entrées','Profit'].map(h => (
+                        <th key={h} className="px-3 py-2 text-left">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageData.map(t => (
+                      <tr key={t.id} className={`border-t border-gray-700 hover:bg-gray-800/50
+                        ${t.profit > 0 ? 'bg-green-950/40' : t.profit < 0 ? 'bg-red-950/30' : ''}`}>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
+                        <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
+                        <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
+                        <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
+                        <td className="px-3 py-2 text-center text-green-400">{t.entry ? '✓' : '—'}</td>
+                        <td className="px-3 py-2 text-center">
+                          {t.nbEntry > 1
+                            ? <span className="text-orange-400 font-semibold">×{t.nbEntry - 1}</span>
+                            : <span className="text-gray-600">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
+                        <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
+                        <td className="px-3 py-2 text-center">{t.itm ? <span className="text-green-400 font-bold">✓</span> : <span className="text-gray-600">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-300">{t.gains > 0 ? `${t.gains}€` : '—'}</td>
+                        <td className="px-3 py-2 text-gray-400">{t.nbEntry}</td>
+                        <td className={`px-3 py-2 font-bold ${t.profit > 0 ? 'text-green-400' : t.profit < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+                          {t.profit > 0 ? '+' : ''}{t.profit.toFixed(2)}€
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {totalPages > 1 && (
+                <div className="flex gap-2 items-center justify-center">
+                  <Btn onClick={() => setPage(p => Math.max(1,p-1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===1}>←</Btn>
+                  <span className="text-xs text-gray-400">{page} / {totalPages}</span>
+                  <Btn onClick={() => setPage(p => Math.min(totalPages,p+1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===totalPages}>→</Btn>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Modale confirmation suppression session */}
+        {confirmDel && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+            <div className="bg-gray-800 border border-gray-600 rounded-xl p-6 w-80 shadow-xl space-y-4">
+              <p className="text-white font-semibold text-base">Supprimer la session ?</p>
+              <p className="text-gray-300 text-sm">
+                Êtes-vous sûr de vouloir supprimer la session{' '}
+                <span className="text-green-400 font-mono font-bold">{confirmDel.code}</span>{' '}
+                du <span className="text-gray-100">{confirmDel.date}</span> ?
+                <br/><span className="text-red-400">Les tournois associés seront aussi supprimés.</span>
+              </p>
+              <div className="flex gap-3 justify-end">
+                <Btn onClick={() => setConfirm(null)} cls="bg-gray-600 hover:bg-gray-500 text-white">Annuler</Btn>
+                <Btn onClick={() => {
+                  setSessions(p => p.filter(x => x.id !== confirmDel.id));
+                  setPlayed(p => p.filter(x => x.session !== confirmDel.code));
+                  setConfirm(null);
+                }} cls="bg-red-600 hover:bg-red-500 text-white font-semibold">Supprimer</Btn>
+              </div>
+            </div>
+          </div>
+        )}
+        </>
+      );
+    }
+
+    // ─── TAB 4 — DASHBOARD ────────────────────────────────────────
+    function DashboardTab({ sessions, playedTournaments }) {
+      const [dashTab, setDashTab]     = useState('tournois');
+      const [period, setPeriod]       = useState('30');
+      const [dateFrom, setDateFrom]   = useState('');
+      const [dateTo, setDateTo]       = useState('');
+      const [fRoom, setFRoom]         = useState([]);
+      const [fFormat, setFFormat]     = useState([]);
+      const [fBuyin, setFBuyin]       = useState([]);
+      const [fField, setFField]       = useState([]);
+      const toggle = (set) => (val) => { set(prev => prev.includes(val) ? prev.filter(x=>x!==val) : [...prev, val]); setPage(1); };
+      const [sortCol, setSortCol]     = useState('date');
+      const [sortDir, setSortDir]     = useState('desc');
+      const [page, setPage]           = useState(1);
+      const PER_PAGE = 10;
+
+      const isCustom = period === 'custom';
+
+      const cutoff = useMemo(() => {
+        if (isCustom || period === 'all') return null;
+        const d = new Date(); d.setDate(d.getDate() - Number(period)); return toStr(d);
+      }, [period, isCustom]);
+
+      const filtered = useMemo(() => playedTournaments.filter(t => {
+        if (isCustom) {
+          if (dateFrom && t.date < dateFrom) return false;
+          if (dateTo   && t.date > dateTo)   return false;
+        } else {
+          if (cutoff && t.date < cutoff) return false;
+        }
+        if (fRoom.length   > 0 && !fRoom.includes(t.room))          return false;
+        if (fFormat.length > 0 && !fFormat.includes(t.format))      return false;
+        if (fBuyin.length  > 0 && !fBuyin.includes(t.buyIn))        return false;
+        if (fField.length  > 0 && !fField.includes(t.field))        return false;
+        return true;
+      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo, fRoom, fFormat, fBuyin, fField]);
+
+      const filtSess = useMemo(() =>
+        sessions.filter(s => {
+          if (s.type !== 'Grind') return false;
+          if (isCustom) {
+            if (dateFrom && s.date < dateFrom) return false;
+            if (dateTo   && s.date > dateTo)   return false;
+          } else {
+            if (cutoff && s.date < cutoff) return false;
+          }
+          return true;
+        }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
+
+      const kpi = useMemo(() => {
+        const totalH = filtSess.reduce((acc, s) => {
+          const parts = s.duration.replace('h', ':').split(':');
+          return acc + Number(parts[0]) + (Number(parts[1]) || 0) / 60;
+        }, 0);
+        const invest = filtered.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
+        const gains  = filtered.reduce((a, t) => a + t.gains, 0);
+        const profit = Math.round((gains - invest) * 100) / 100;
+        const roi       = invest > 0 ? ((profit / invest) * 100).toFixed(1) : '0';
+        const itm       = filtered.filter(t => t.itm).length;
+        const totalEntries = filtered.reduce((a, t) => a + t.nbEntry, 0);
+        const itmR      = totalEntries > 0 ? ((itm / totalEntries) * 100).toFixed(1) : '0';
+        const reEntries = filtered.reduce((a, t) => a + Math.max(0, t.nbEntry - 1), 0);
+        return { grind: filtSess.length, hours: Math.round(totalH), total: filtered.length, roi, profit, itmR, reEntries };
+      }, [filtered, filtSess]);
+
+      const cumulData = useMemo(() => {
+        const sorted = [...filtered].sort((a,b) => a.date.localeCompare(b.date));
+        let cum = 0;
+        const map = {};
+        sorted.forEach(t => { cum += t.profit; map[t.date] = cum; });
+        return Object.entries(map).map(([d, profit]) => ({ date: d.slice(5), profit }));
+      }, [filtered]);
+
+      const byRoom = useMemo(() => {
+        const m = {};
+        filtered.forEach(t => { m[t.room] = (m[t.room]||0) + t.profit; });
+        return Object.entries(m).map(([room,profit]) => ({ room, profit }));
+      }, [filtered]);
+
+      const byFormat = useMemo(() => {
+        const m = {};
+        filtered.forEach(t => { m[t.format] = (m[t.format]||0) + t.profit; });
+        return Object.entries(m).map(([format,profit]) => ({ format, profit }));
+      }, [filtered]);
+
+      const byField = useMemo(() => {
+        const ORDER = ['0-149','150-499','500-999','1000-2000','2000+'];
+        const m = {};
+        filtered.forEach(t => { m[t.field] = (m[t.field]||0) + t.profit; });
+        return ORDER.filter(f => f in m).map(f => ({ field: f, profit: m[f] }));
+      }, [filtered]);
+
+      // ── Données dashboard Structure ──
+      const filtTravail = useMemo(() =>
+        sessions.filter(s => {
+          if (s.type !== 'Travail') return false;
+          if (isCustom) {
+            if (dateFrom && s.date < dateFrom) return false;
+            if (dateTo   && s.date > dateTo)   return false;
+          } else {
+            if (cutoff && s.date < cutoff) return false;
+          }
+          return true;
+        }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
+
+      const structData = useMemo(() => {
+        const parseDur = s => { const p = s.duration.replace('h',':').split(':'); return Number(p[0])+(Number(p[1])||0)/60; };
+        const hGrind   = filtSess.reduce((a,s) => a + parseDur(s), 0);
+        const hTravail = filtTravail.reduce((a,s) => a + parseDur(s), 0);
+        const total    = hGrind + hTravail;
+        const ratioG   = total > 0 ? Math.round(hGrind/total*100) : 0;
+        const ratioT   = total > 0 ? Math.round(hTravail/total*100) : 0;
+
+        const MOMENT_COLORS = { Matin:'#f59e0b', Jour:'#38bdf8', Soir:'#818cf8', Live:'#34d399' };
+        const byMomentCount = ['Matin','Jour','Soir','Live'].map(m => ({
+          name: m, value: filtered.filter(t => filtSess.find(s=>s.code===t.session && s.typeSession===m)).length,
+          fill: MOMENT_COLORS[m],
+        })).filter(x => x.value > 0);
+
+        const byFormatCount = FORMATS.map(f => ({ name:f, value: filtered.filter(t=>t.format===f).length })).filter(x=>x.value>0);
+        const byFieldCount  = ['0-149','150-499','500-999','1000-2000','2000+'].map(f => ({ name:f, value: filtered.filter(t=>t.field===f).length })).filter(x=>x.value>0);
+        const byBuyinCount  = BUY_INS.map(b => ({ name:`${b}€`, value: filtered.filter(t=>t.buyIn===b).length, _b:b })).filter(x=>x.value>0);
+
+        return { hGrind: Math.round(hGrind), hTravail: Math.round(hTravail),
+                 total: Math.round(total), ratioG, ratioT,
+                 byMomentCount, byFormatCount, byFieldCount, byBuyinCount };
+      }, [filtSess, filtTravail, filtered]);
+
+      const byBuyin = useMemo(() => {
+        const m = {};
+        filtered.forEach(t => { m[t.buyIn] = (m[t.buyIn]||0) + t.profit; });
+        return Object.entries(m).map(([b,profit]) => ({ buyin:`${b}€`, profit, _b: Number(b) })).sort((a,b) => a._b - b._b);
+      }, [filtered]);
+
+      const sorted = useMemo(() => {
+        return [...filtered].sort((a,b) => {
+          let va = a[sortCol], vb = b[sortCol];
+          if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+          return sortDir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
+        });
+      }, [filtered, sortCol, sortDir]);
+
+      const totalPages = Math.ceil(sorted.length / PER_PAGE);
+      const pageData   = sorted.slice((page-1)*PER_PAGE, page*PER_PAGE);
+
+      const sort = col => {
+        if (sortCol === col) setSortDir(d => d==='asc'?'desc':'asc');
+        else { setSortCol(col); setSortDir('desc'); }
+        setPage(1);
+      };
+
+      const SortTh = ({ col, children }) => (
+        <th className="px-3 py-2 cursor-pointer select-none hover:text-white whitespace-nowrap text-left"
+          onClick={() => sort(col)}>
+          {children}{sortCol===col ? (sortDir==='asc'?' ↑':' ↓') : ''}
+        </th>
+      );
+
+      const KpiCard = ({ label, value, color='text-white' }) => (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+          <p className="text-xs text-gray-500 mb-1">{label}</p>
+          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+        </div>
+      );
+
+      const ttStyle     = { background:'#1f2937', border:'1px solid #374151', color:'#e5e7eb', borderRadius:'6px' };
+      const ttLabelStyle = { color:'#9ca3af', fontWeight:500 };
+      const ttItemStyle  = { color:'#e5e7eb' };
+
+      return (
+        <div className="p-4 space-y-5">
+
+          {/* Onglets Dashboard */}
+          <div className="flex gap-1 border-b border-gray-700">
+            {[['tournois','📈 Performance'],['sessions','🔍 Structure']].map(([k,l]) => (
+              <button key={k} onClick={() => setDashTab(k)}
+                className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+                  ${dashTab===k ? 'border-green-500 text-green-400' : 'border-transparent text-gray-400 hover:text-white'}`}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          {/* Filters (communs aux deux onglets) */}
+          <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 space-y-3">
+            <div className="flex flex-wrap gap-4 items-end">
+              <h2 className="text-lg font-bold text-green-400 self-center mr-1">Dashboard</h2>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Période</p>
+                <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
+                  {[['7','7j'],['30','30j'],['all','Tout'],['custom','Plage']].map(([v,l]) => (
+                    <button key={v} onClick={() => { setPeriod(v); setPage(1); }}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors
+                        ${period===v ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              {isCustom && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Du</p>
+                  <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }}
+                    className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500" />
+                </div>
+              )}
+              {isCustom && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Au</p>
+                  <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
+                    className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500" />
+                </div>
+              )}
+              {(fRoom.length+fFormat.length+fBuyin.length+fField.length) > 0 && (
+                <button onClick={() => { setFRoom([]); setFFormat([]); setFBuyin([]); setFField([]); setPage(1); }}
+                  className="text-xs text-red-400 hover:text-red-300 border border-red-800 hover:border-red-600 rounded px-2 py-1 transition-colors self-end">
+                  ✕ Réinitialiser
+                </button>
+              )}
+            </div>
+
+            {/* Filtres multi-sélection */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+              {/* Room */}
+              <div>
+                <p className="text-xs text-gray-500 mb-1.5">Room {fRoom.length > 0 && <span className="text-green-400">({fRoom.length})</span>}</p>
+                <div className="flex flex-wrap gap-1">
+                  {ROOMS.map(r => (
+                    <button key={r} onClick={() => toggle(setFRoom)(r)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                        ${fRoom.includes(r)
+                          ? 'border-transparent text-white ' + ROOM_CLS[r]
+                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Format */}
+              <div>
+                <p className="text-xs text-gray-500 mb-1.5">Format {fFormat.length > 0 && <span className="text-green-400">({fFormat.length})</span>}</p>
+                <div className="flex flex-wrap gap-1">
+                  {FORMATS.map(f => (
+                    <button key={f} onClick={() => toggle(setFFormat)(f)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                        ${fFormat.includes(f)
+                          ? 'border-transparent text-white ' + FMT_CLS[f]
+                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Buy-In */}
+              <div>
+                <p className="text-xs text-gray-500 mb-1.5">Buy-In {fBuyin.length > 0 && <span className="text-green-400">({fBuyin.length})</span>}</p>
+                <div className="flex flex-wrap gap-1">
+                  {BUY_INS.map(b => (
+                    <button key={b} onClick={() => toggle(setFBuyin)(b)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                        ${fBuyin.includes(b)
+                          ? 'bg-indigo-600 border-indigo-500 text-white'
+                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
+                      {b}€
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Field */}
+              <div>
+                <p className="text-xs text-gray-500 mb-1.5">Field {fField.length > 0 && <span className="text-green-400">({fField.length})</span>}</p>
+                <div className="flex flex-wrap gap-1">
+                  {FIELDS.map(f => (
+                    <button key={f} onClick={() => toggle(setFField)(f)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                        ${fField.includes(f)
+                          ? 'bg-cyan-700 border-cyan-600 text-white'
+                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <KpiCard label="Sessions Grind"  value={kpi.grind} />
+            <KpiCard label="Total Heures"    value={`${kpi.hours}h`} />
+            <KpiCard label="Tournois / Re-Entry" value={`${kpi.total} / ${kpi.reEntries}`} color="text-orange-400" />
+            <KpiCard label="ROI" value={`${kpi.roi}%`} color={Number(kpi.roi)>=0?'text-green-400':'text-red-400'} />
+            <KpiCard label="Profit Net" value={`${kpi.profit>=0?'+':''}${kpi.profit.toFixed(2)}€`} color={kpi.profit>=0?'text-green-400':'text-red-400'} />
+            <KpiCard label="ITM Rate" value={`${kpi.itmR}%`} color="text-yellow-400" />
+          </div>
+
+          {/* Charts row 1 */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Profit Cumulé</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={cumulData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="date" tick={{ fill:'#9ca3af', fontSize:10 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:10 }} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} />
+                  <Line type="monotone" dataKey="profit" stroke="#22c55e" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Room</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={byRoom}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="room" tick={{ fill:'#9ca3af', fontSize:11 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} />
+                  <Bar dataKey="profit" radius={[4,4,0,0]}>
+                    {byRoom.map(e => <Cell key={e.room} fill={ROOM_CHART[e.room]||'#6b7280'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* ══════════ ONGLET TOURNOIS ══════════ */}
+          {dashTab === 'tournois' && (<>
+
+          {/* Charts row 2 */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Format</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={byFormat}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="format" tick={{ fill:'#9ca3af', fontSize:11 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                  <Bar dataKey="profit" radius={[4,4,0,0]}>
+                    {byFormat.map(e => <Cell key={e.format} fill={FMT_CHART[e.format]||'#6b7280'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Field</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={byField} layout="vertical" barSize={18}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} />
+                  <YAxis type="category" dataKey="field" tick={{ fill:'#9ca3af', fontSize:10 }} width={64} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                  <Bar dataKey="profit" radius={[0,4,4,0]}>
+                    {byField.map(e => <Cell key={e.field} fill={e.profit>=0?'#06b6d4':'#f97316'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Buy-In</p>
+              <ResponsiveContainer width="100%" height={Math.max(180, byBuyin.length * 32)}>
+                <BarChart data={byBuyin} layout="vertical" barSize={18}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} />
+                  <YAxis type="category" dataKey="buyin" tick={{ fill:'#9ca3af', fontSize:11 }} width={36} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                  <Bar dataKey="profit" radius={[0,4,4,0]}>
+                    {byBuyin.map(e => <Cell key={e.buyin} fill={e.profit>=0?'#22c55e':'#ef4444'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Table détail tournois */}
+          <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+            <p className="text-sm font-semibold text-gray-300 px-4 py-3 border-b border-gray-700">
+              Détail — {filtered.length} tournois
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" style={{ minWidth:'780px' }}>
+                <thead className="bg-gray-900 text-gray-400 text-xs uppercase">
+                  <tr>
+                    <SortTh col="date">Date</SortTh>
+                    <SortTh col="session">Session</SortTh>
+                    <SortTh col="room">Room</SortTh>
+                    <SortTh col="buyIn">Buy-In</SortTh>
+                    <SortTh col="format">Format</SortTh>
+                    <SortTh col="field">Field</SortTh>
+                    <SortTh col="itm">ITM</SortTh>
+                    <SortTh col="gains">Gains</SortTh>
+                    <SortTh col="profit">Profit</SortTh>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageData.map(t => (
+                    <tr key={t.id} className={`border-t border-gray-700 hover:bg-gray-700/30
+                      ${t.profit>0?'bg-green-950/30':t.profit<0?'bg-red-950/20':''}`}>
+                      <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
+                      <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
+                      <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
+                      <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
+                      <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
+                      <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
+                      <td className="px-3 py-2 text-center">{t.itm ? <span className="text-green-400 font-bold">✓</span> : <span className="text-gray-700">—</span>}</td>
+                      <td className="px-3 py-2 text-gray-300">{t.gains>0?`${t.gains}€`:'—'}</td>
+                      <td className={`px-3 py-2 font-bold ${t.profit>0?'text-green-400':t.profit<0?'text-red-400':'text-gray-500'}`}>
+                        {t.profit>0?'+':''}{t.profit.toFixed(2)}€
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {totalPages > 1 && (
+              <div className="flex gap-2 items-center justify-center py-3 border-t border-gray-700">
+                <Btn onClick={() => setPage(p => Math.max(1,p-1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===1}>←</Btn>
+                <span className="text-xs text-gray-400">{page} / {totalPages}</span>
+                <Btn onClick={() => setPage(p => Math.min(totalPages,p+1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===totalPages}>→</Btn>
+              </div>
+            )}
+          </div>
+          </>)}
+
+          {/* ══════════ ONGLET STRUCTURE ══════════ */}
+          {dashTab === 'sessions' && (<>
+
+          {/* Ratio Grind / Travail */}
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+            <p className="text-sm font-semibold text-gray-300 mb-4">Ratio Temps Grind / Travail</p>
+            <div className="flex items-center gap-6 mb-3">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-green-400">{structData.hGrind}h</p>
+                <p className="text-xs text-gray-500 mt-0.5">Grind ({structData.ratioG}%)</p>
+              </div>
+              <div className="flex-1">
+                <div className="flex h-5 rounded-full overflow-hidden bg-gray-700">
+                  {structData.ratioG > 0 && (
+                    <div className="bg-green-500 flex items-center justify-center text-xs font-bold text-white transition-all"
+                      style={{ width:`${structData.ratioG}%` }}>
+                      {structData.ratioG >= 15 ? `${structData.ratioG}%` : ''}
+                    </div>
+                  )}
+                  {structData.ratioT > 0 && (
+                    <div className="bg-blue-500 flex items-center justify-center text-xs font-bold text-white transition-all"
+                      style={{ width:`${structData.ratioT}%` }}>
+                      {structData.ratioT >= 15 ? `${structData.ratioT}%` : ''}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-blue-400">{structData.hTravail}h</p>
+                <p className="text-xs text-gray-500 mt-0.5">Travail ({structData.ratioT}%)</p>
+              </div>
+            </div>
+            <p className="text-xs text-gray-600 text-center">Total : {structData.total}h sur la période</p>
+          </div>
+
+          {/* Tournois par Format + par Type de session */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Tournois par Format</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={structData.byFormatCount}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="name" tick={{ fill:'#9ca3af', fontSize:12 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} allowDecimals={false} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} />
+                  <Bar dataKey="value" radius={[4,4,0,0]}>
+                    {structData.byFormatCount.map(e => <Cell key={e.name} fill={FMT_CHART[e.name]||'#6b7280'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Tournois par Type de Session</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={structData.byMomentCount}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="name" tick={{ fill:'#9ca3af', fontSize:12 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} allowDecimals={false} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} />
+                  <Bar dataKey="value" radius={[4,4,0,0]}>
+                    {structData.byMomentCount.map(e => <Cell key={e.name} fill={e.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Tournois par Field + par Buy-In */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Tournois par Field</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={structData.byFieldCount} layout="vertical" barSize={18}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} allowDecimals={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fill:'#9ca3af', fontSize:10 }} width={68} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} />
+                  <Bar dataKey="value" fill="#a78bfa" radius={[0,4,4,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Tournois par Buy-In</p>
+              <ResponsiveContainer width="100%" height={Math.max(180, structData.byBuyinCount.length * 32)}>
+                <BarChart data={structData.byBuyinCount} layout="vertical" barSize={18}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} allowDecimals={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fill:'#9ca3af', fontSize:11 }} width={36} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} />
+                  <Bar dataKey="value" fill="#38bdf8" radius={[0,4,4,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          </>)}
+
+        </div>
+      );
+    }
+
+    // ─── LOCALSTORAGE HELPERS ─────────────────────────────────────
+    const LS_KEYS = { grids: 'pt_grids', sessions: 'pt_sessions', played: 'pt_played' };
+    const LS_GRIDS_VERSION = '1';
+    // Réinitialise uniquement les grilles si la version change (jamais les sessions/tournois)
+    (function migrateGrids() {
+      try {
+        if (localStorage.getItem('pt_grids_version') !== LS_GRIDS_VERSION) {
+          localStorage.removeItem(LS_KEYS.grids);
+          localStorage.setItem('pt_grids_version', LS_GRIDS_VERSION);
+        }
+      } catch {}
+    })();
+
+    function lsGet(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch { return fallback; }
+    }
+
+    function lsSet(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
+
+    // ── usePersist : localStorage (cache offline) + Firestore (sync multi-appareils) ──
+    function usePersist(key, initial) {
+      const [state, setState] = useState(() => lsGet(key, initial));
+      const ready    = useRef(false);  // Firestore a répondu au moins une fois
+      const skipNext = useRef(false);  // évite d'écrire ce qu'on vient de lire
+
+      // Écoute temps réel Firestore
+      useEffect(() => {
+        const unsub = db.collection('pt').doc(key).onSnapshot(
+          snap => {
+            if (snap.exists) {
+              skipNext.current = true;
+              const val = snap.data().v;
+              setState(val);
+              lsSet(key, val);
+            } else {
+              // Première connexion : on pousse les données locales vers Firestore
+              db.collection('pt').doc(key).set({ v: lsGet(key, initial) }).catch(() => {});
+            }
+            ready.current = true;
+          },
+          () => { ready.current = true; } // hors-ligne : on reste sur localStorage
+        );
+        return unsub;
+      }, []);
+
+      // Écriture vers Firestore + localStorage à chaque changement local
+      useEffect(() => {
+        if (skipNext.current) { skipNext.current = false; return; }
+        if (!ready.current) return;
+        lsSet(key, state);
+        db.collection('pt').doc(key).set({ v: state }).catch(() => {});
+      }, [state]);
+
+      return [state, setState];
+    }
+
+    // ─── ROOT ─────────────────────────────────────────────────────
+    function PokerTracker() {
+      const [activeTab, setActiveTab]       = useState('library');
+      const [savedGrids, setSavedGrids]     = usePersist(LS_KEYS.grids,    INIT_GRIDS);
+      const [sessions,   setSessions]       = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
+      const [played,     setPlayed]         = usePersist(LS_KEYS.played,    INIT_PLAYED);
+      const [online, setOnline]             = useState(navigator.onLine);
+      useEffect(() => {
+        const on  = () => setOnline(true);
+        const off = () => setOnline(false);
+        window.addEventListener('online', on);
+        window.addEventListener('offline', off);
+        return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+      }, []);
+
+      const TABS = [
+        { id:'library',   emoji:'📋', label:'Mes Grilles'        },
+        { id:'grid',      emoji:'📅', label:'Grille du Jour'     },
+        { id:'sessions',  emoji:'🎯', label:'Sessions & Tournois'},
+        { id:'dashboard', emoji:'📊', label:'Dashboard'          },
+      ];
+
+      return (
+        <div className="min-h-screen bg-gray-900 text-white">
+          <header className="bg-gray-950 border-b border-gray-800 px-5 py-3 flex items-center gap-3">
+            <span className="text-3xl leading-none">♠</span>
+            <div>
+              <h1 className="text-xl font-bold text-green-400 tracking-wide leading-none">PokerTrack</h1>
+              <p className="text-xs text-gray-600 leading-none mt-0.5">Tournament Tracker</p>
+            </div>
+            <div className="ml-auto flex items-center gap-4">
+              <div className="flex gap-3 text-xs text-gray-600">
+                <span>{savedGrids.length} grille{savedGrids.length!==1?'s':''}</span>
+                <span>·</span>
+                <span>{sessions.length} sessions</span>
+                <span>·</span>
+                <span>{played.length} tournois joués</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs" title={online ? 'Synchronisé avec Firebase' : 'Hors-ligne — données locales'}>
+                <span className={`w-2 h-2 rounded-full ${online ? 'bg-green-400' : 'bg-gray-600'}`} />
+                <span className={online ? 'text-green-500' : 'text-gray-600'}>{online ? '☁ Sync' : 'Hors-ligne'}</span>
+              </div>
+              <button
+                onClick={() => {
+                  if (confirm('Réinitialiser toutes les données avec les démos ?')) {
+                    setSavedGrids(INIT_GRIDS);
+                    setSessions(INIT_SESSIONS);
+                    setPlayed(INIT_PLAYED);
+                  }
+                }}
+                className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                title="Réinitialiser les données">
+                ↺ Reset
+              </button>
+            </div>
+          </header>
+
+          <nav className="bg-gray-900 border-b border-gray-800 px-2 flex gap-0.5 overflow-x-auto">
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5
+                  ${activeTab===t.id
+                    ? 'border-green-500 text-green-400'
+                    : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'}`}>
+                <span>{t.emoji}</span>{t.label}
+              </button>
+            ))}
+          </nav>
+
+          <main className="max-w-screen-xl mx-auto">
+            {activeTab==='library'   && <GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} />}
+            {activeTab==='grid'      && <DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} />}
+            {activeTab==='sessions'  && <SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} />}
+            {activeTab==='dashboard' && <DashboardTab sessions={sessions} playedTournaments={played} />}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<PokerTracker />);
+  </script>
+</body>
+</html>
