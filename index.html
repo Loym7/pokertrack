@@ -1157,12 +1157,15 @@
               <div className="overflow-x-auto rounded-lg border border-gray-700">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                    <tr>{['ID','Date','Moment','Début','Fin','Durée',''].map(h=>(
+                    <tr>{['ID','Date','Moment','Début','Fin','Durée','Résultat',''].map(h=>(
                       <th key={h} className="px-3 py-2 text-left">{h}</th>
                     ))}</tr>
                   </thead>
                   <tbody>
-                    {[...sessions].filter(s=>s.type==='Grind').reverse().map(s=>(
+                    {[...sessions].filter(s=>s.type==='Grind').reverse().map(s=>{
+                      const sessProfit = Math.round(playedTournaments.filter(t=>t.session===s.code).reduce((a,t)=>a+t.profit,0)*100)/100;
+                      const hasTourns  = playedTournaments.some(t=>t.session===s.code);
+                      return (
                       <tr key={s.id} className={`border-t border-gray-700 ${editId===s.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}>
                         <td className="px-3 py-2 font-mono text-green-400 font-semibold">{s.code}</td>
                         <td className="px-3 py-2 text-gray-300">{s.date}</td>
@@ -1195,8 +1198,16 @@
                             </div>
                           )}
                         </td>
+                        <td className="px-3 py-2 font-bold">
+                          {hasTourns
+                            ? <span className={sessProfit >= 0 ? 'text-green-400' : 'text-red-400'}>
+                                {sessProfit >= 0 ? '+' : ''}{sessProfit.toFixed(2)}€
+                              </span>
+                            : <span className="text-gray-600">—</span>}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1368,52 +1379,70 @@
     // ─── TAB 4 — DASHBOARD ────────────────────────────────────────
     // ─── TAB 5 — RECORDS ──────────────────────────────────────────
     function RecordsTab({ sessions, playedTournaments }) {
-      const grindSessions = sessions.filter(s => s.type === 'Grind');
+      const [period, setPeriod]     = useState('all');
+      const [dateFrom, setDateFrom] = useState('');
+      const [dateTo, setDateTo]     = useState('');
+      const isCustom = period === 'custom';
+
+      const cutoff = useMemo(() => {
+        if (isCustom || period === 'all') return null;
+        const d = new Date(); d.setDate(d.getDate() - Number(period)); return toStr(d);
+      }, [period, isCustom]);
+
+      const filtTourns = useMemo(() => playedTournaments.filter(t => {
+        if (isCustom) {
+          if (dateFrom && t.date < dateFrom) return false;
+          if (dateTo   && t.date > dateTo)   return false;
+        } else { if (cutoff && t.date < cutoff) return false; }
+        return true;
+      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo]);
+
+      const filtSess = useMemo(() => sessions.filter(s => {
+        if (s.type !== 'Grind') return false;
+        if (isCustom) {
+          if (dateFrom && s.date < dateFrom) return false;
+          if (dateTo   && s.date > dateTo)   return false;
+        } else { if (cutoff && s.date < cutoff) return false; }
+        return true;
+      }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
 
       const parseDur = s => {
         const p = (s.duration || '0h00').replace('h', ':').split(':');
         return Number(p[0]) + (Number(p[1]) || 0) / 60;
       };
 
-      // Profit par session
-      const sessionsWithProfit = grindSessions.map(s => {
-        const tourns = playedTournaments.filter(t => t.session === s.code);
+      const sessionsWithProfit = useMemo(() => filtSess.map(s => {
+        const tourns = filtTourns.filter(t => t.session === s.code);
         const profit = Math.round(tourns.reduce((a, t) => a + t.profit, 0) * 100) / 100;
         const invest = tourns.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
-        const roi    = invest > 0 ? Math.round(profit / invest * 100) : 0;
-        return { ...s, profit, tourns: tourns.length, invest, roi, heures: Math.round(parseDur(s) * 10) / 10 };
-      }).filter(s => s.tourns > 0);
+        return { ...s, profit, tourns: tourns.length, invest, heures: Math.round(parseDur(s) * 10) / 10 };
+      }).filter(s => s.tourns > 0), [filtSess, filtTourns]);
 
-      // Records sessions
       const bestSess    = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.profit > a.profit ? b : a) : null;
       const worstSess   = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.profit < a.profit ? b : a) : null;
-      const longestSess = grindSessions.length ? [...grindSessions].reduce((a, b) => parseDur(b) > parseDur(a) ? b : a) : null;
+      const longestSess = filtSess.length ? [...filtSess].reduce((a, b) => parseDur(b) > parseDur(a) ? b : a) : null;
       const mostTourns  = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.tourns > a.tourns ? b : a) : null;
-      const bestROI     = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.roi > a.roi ? b : a) : null;
+      const bestTourn   = filtTourns.length ? filtTourns.reduce((a, b) => b.profit > a.profit ? b : a) : null;
+      const worstTourn  = filtTourns.length ? filtTourns.reduce((a, b) => b.profit < a.profit ? b : a) : null;
+      const biggestGain = filtTourns.length ? filtTourns.reduce((a, b) => b.gains > a.gains ? b : a) : null;
 
-      // Records tournois
-      const bestTourn  = playedTournaments.length ? playedTournaments.reduce((a, b) => b.profit > a.profit ? b : a) : null;
-      const worstTourn = playedTournaments.length ? playedTournaments.reduce((a, b) => b.profit < a.profit ? b : a) : null;
-      const biggestGain = playedTournaments.length ? playedTournaments.reduce((a, b) => b.gains > a.gains ? b : a) : null;
-
-      // Séries
       const sortedSess = [...sessionsWithProfit].sort((a, b) => a.date.localeCompare(b.date));
       let curStreak = 0, bestStreak = 0, curLose = 0, bestLose = 0, tmp = 0, tmpL = 0;
       sortedSess.forEach(s => {
         if (s.profit > 0) { tmp++; tmpL = 0; bestStreak = Math.max(bestStreak, tmp); }
         else { tmpL++; tmp = 0; bestLose = Math.max(bestLose, tmpL); }
       });
-      // Série en cours
-      for (let i = sortedSess.length - 1; i >= 0; i--) {
-        if (sortedSess[i].profit > 0) curStreak++;
-        else break;
-      }
-      for (let i = sortedSess.length - 1; i >= 0; i--) {
-        if (sortedSess[i].profit <= 0) curLose++;
-        else break;
-      }
+      for (let i = sortedSess.length - 1; i >= 0; i--) { if (sortedSess[i].profit > 0) curStreak++; else break; }
+      for (let i = sortedSess.length - 1; i >= 0; i--) { if (sortedSess[i].profit <= 0) curLose++; else break; }
 
-      const MOMENT_COLORS = { Matin:'#f59e0b', Jour:'#38bdf8', Soir:'#818cf8', Live:'#34d399' };
+      // Plus gros gain sur une série gagnante / plus gros down sur une série perdante
+      let bestStreakGain = 0, bestStreakDown = 0, runG = 0, runL = 0;
+      sortedSess.forEach(s => {
+        if (s.profit > 0) { runG += s.profit; runL = 0; bestStreakGain = Math.max(bestStreakGain, runG); }
+        else              { runL += s.profit; runG = 0; bestStreakDown = Math.min(bestStreakDown, runL); }
+      });
+      bestStreakGain = Math.round(bestStreakGain * 100) / 100;
+      bestStreakDown = Math.round(bestStreakDown * 100) / 100;
 
       const RecordCard = ({ emoji, label, value, sub, color = 'text-white', badge, badgeColor }) => (
         <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
@@ -1431,32 +1460,51 @@
 
       return (
         <div className="p-4 space-y-6">
-          <h2 className="text-lg font-bold text-yellow-400">🏆 Records</h2>
+
+          {/* Filtres période */}
+          <div className="flex flex-wrap gap-3 items-end">
+            <h2 className="text-lg font-bold text-yellow-400 self-center">🏆 Records</h2>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Période</p>
+              <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
+                {[['7','7j'],['30','30j'],['all','Tout'],['custom','Plage']].map(([v,l]) => (
+                  <button key={v} onClick={() => setPeriod(v)}
+                    className={`px-3 py-1 rounded text-xs font-medium transition-colors
+                      ${period===v ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {isCustom && (<>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Du</p>
+                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-yellow-500" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Au</p>
+                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-yellow-500" />
+              </div>
+            </>)}
+          </div>
 
           {/* Sessions */}
           <div>
             <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Sessions</p>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {sessionsWithProfit.length === 0 ? empty : <>
                 <RecordCard emoji="🚀" label="Meilleure session"
-                  value={`+${bestSess.profit.toFixed(2)}€`} color="text-green-400"
-                  sub={`${bestSess.code} — ${bestSess.date}`}
-                  badge={bestSess.typeSession} badgeColor={`text-white`}
-                  style={{ background: MOMENT_COLORS[bestSess.typeSession] }} />
+                  value={`${bestSess.profit >= 0 ? '+' : ''}${bestSess.profit.toFixed(2)}€`} color="text-green-400"
+                  sub={`${bestSess.code} — ${bestSess.date}`} badge={bestSess.typeSession} />
                 <RecordCard emoji="💸" label="Pire session"
                   value={`${worstSess.profit.toFixed(2)}€`} color="text-red-400"
-                  sub={`${worstSess.code} — ${worstSess.date}`}
-                  badge={worstSess.typeSession} />
+                  sub={`${worstSess.code} — ${worstSess.date}`} badge={worstSess.typeSession} />
                 <RecordCard emoji="⏱" label="Session la plus longue"
                   value={longestSess.duration} color="text-blue-400"
-                  sub={`${longestSess.code} — ${longestSess.date}`}
-                  badge={longestSess.typeSession} />
+                  sub={`${longestSess.code} — ${longestSess.date}`} badge={longestSess.typeSession} />
                 <RecordCard emoji="🎰" label="+ de tournois"
                   value={`${mostTourns.tourns} tournois`} color="text-purple-400"
                   sub={`${mostTourns.code} — ${mostTourns.date}`} />
-                <RecordCard emoji="📈" label="Meilleur ROI"
-                  value={`${bestROI.roi}%`} color="text-cyan-400"
-                  sub={`${bestROI.code} — ${bestROI.date}`} />
               </>}
             </div>
           </div>
@@ -1465,7 +1513,7 @@
           <div>
             <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Tournois</p>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {playedTournaments.length === 0 ? empty : <>
+              {filtTourns.length === 0 ? empty : <>
                 <RecordCard emoji="💰" label="Tournoi le plus profitable"
                   value={`+${bestTourn.profit.toFixed(2)}€`} color="text-green-400"
                   sub={`${bestTourn.session} — ${bestTourn.date} — ${bestTourn.room}`}
@@ -1493,12 +1541,18 @@
                 <RecordCard emoji="🏅" label="Meilleure série gagnante"
                   value={`${bestStreak} session${bestStreak > 1 ? 's' : ''}`}
                   color="text-yellow-400" />
+                <RecordCard emoji="💹" label="Plus gros gain en série"
+                  value={`+${bestStreakGain.toFixed(2)}€`}
+                  color="text-green-400" />
                 <RecordCard emoji="❄️" label="Série perdante en cours"
                   value={`${curLose} session${curLose > 1 ? 's' : ''}`}
                   color={curLose > 0 ? 'text-red-400' : 'text-gray-500'} />
                 <RecordCard emoji="📊" label="Pire série perdante"
                   value={`${bestLose} session${bestLose > 1 ? 's' : ''}`}
                   color="text-orange-400" />
+                <RecordCard emoji="🕳️" label="Plus gros down en série"
+                  value={`${bestStreakDown.toFixed(2)}€`}
+                  color="text-red-400" />
               </>}
             </div>
           </div>
