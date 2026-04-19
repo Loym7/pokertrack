@@ -1366,6 +1366,146 @@
     }
 
     // ─── TAB 4 — DASHBOARD ────────────────────────────────────────
+    // ─── TAB 5 — RECORDS ──────────────────────────────────────────
+    function RecordsTab({ sessions, playedTournaments }) {
+      const grindSessions = sessions.filter(s => s.type === 'Grind');
+
+      const parseDur = s => {
+        const p = (s.duration || '0h00').replace('h', ':').split(':');
+        return Number(p[0]) + (Number(p[1]) || 0) / 60;
+      };
+
+      // Profit par session
+      const sessionsWithProfit = grindSessions.map(s => {
+        const tourns = playedTournaments.filter(t => t.session === s.code);
+        const profit = Math.round(tourns.reduce((a, t) => a + t.profit, 0) * 100) / 100;
+        const invest = tourns.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
+        const roi    = invest > 0 ? Math.round(profit / invest * 100) : 0;
+        return { ...s, profit, tourns: tourns.length, invest, roi, heures: Math.round(parseDur(s) * 10) / 10 };
+      }).filter(s => s.tourns > 0);
+
+      // Records sessions
+      const bestSess    = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.profit > a.profit ? b : a) : null;
+      const worstSess   = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.profit < a.profit ? b : a) : null;
+      const longestSess = grindSessions.length ? [...grindSessions].reduce((a, b) => parseDur(b) > parseDur(a) ? b : a) : null;
+      const mostTourns  = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.tourns > a.tourns ? b : a) : null;
+      const bestROI     = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.roi > a.roi ? b : a) : null;
+
+      // Records tournois
+      const bestTourn  = playedTournaments.length ? playedTournaments.reduce((a, b) => b.profit > a.profit ? b : a) : null;
+      const worstTourn = playedTournaments.length ? playedTournaments.reduce((a, b) => b.profit < a.profit ? b : a) : null;
+      const biggestGain = playedTournaments.length ? playedTournaments.reduce((a, b) => b.gains > a.gains ? b : a) : null;
+
+      // Séries
+      const sortedSess = [...sessionsWithProfit].sort((a, b) => a.date.localeCompare(b.date));
+      let curStreak = 0, bestStreak = 0, curLose = 0, bestLose = 0, tmp = 0, tmpL = 0;
+      sortedSess.forEach(s => {
+        if (s.profit > 0) { tmp++; tmpL = 0; bestStreak = Math.max(bestStreak, tmp); }
+        else { tmpL++; tmp = 0; bestLose = Math.max(bestLose, tmpL); }
+      });
+      // Série en cours
+      for (let i = sortedSess.length - 1; i >= 0; i--) {
+        if (sortedSess[i].profit > 0) curStreak++;
+        else break;
+      }
+      for (let i = sortedSess.length - 1; i >= 0; i--) {
+        if (sortedSess[i].profit <= 0) curLose++;
+        else break;
+      }
+
+      const MOMENT_COLORS = { Matin:'#f59e0b', Jour:'#38bdf8', Soir:'#818cf8', Live:'#34d399' };
+
+      const RecordCard = ({ emoji, label, value, sub, color = 'text-white', badge, badgeColor }) => (
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">{emoji}</span>
+            <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">{label}</p>
+          </div>
+          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+          {sub && <p className="text-xs text-gray-500">{sub}</p>}
+          {badge && <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${badgeColor || 'bg-gray-700 text-gray-300'}`}>{badge}</span>}
+        </div>
+      );
+
+      const empty = <p className="text-gray-600 text-sm col-span-full text-center py-8">Pas encore assez de données</p>;
+
+      return (
+        <div className="p-4 space-y-6">
+          <h2 className="text-lg font-bold text-yellow-400">🏆 Records</h2>
+
+          {/* Sessions */}
+          <div>
+            <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Sessions</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              {sessionsWithProfit.length === 0 ? empty : <>
+                <RecordCard emoji="🚀" label="Meilleure session"
+                  value={`+${bestSess.profit.toFixed(2)}€`} color="text-green-400"
+                  sub={`${bestSess.code} — ${bestSess.date}`}
+                  badge={bestSess.typeSession} badgeColor={`text-white`}
+                  style={{ background: MOMENT_COLORS[bestSess.typeSession] }} />
+                <RecordCard emoji="💸" label="Pire session"
+                  value={`${worstSess.profit.toFixed(2)}€`} color="text-red-400"
+                  sub={`${worstSess.code} — ${worstSess.date}`}
+                  badge={worstSess.typeSession} />
+                <RecordCard emoji="⏱" label="Session la plus longue"
+                  value={longestSess.duration} color="text-blue-400"
+                  sub={`${longestSess.code} — ${longestSess.date}`}
+                  badge={longestSess.typeSession} />
+                <RecordCard emoji="🎰" label="+ de tournois"
+                  value={`${mostTourns.tourns} tournois`} color="text-purple-400"
+                  sub={`${mostTourns.code} — ${mostTourns.date}`} />
+                <RecordCard emoji="📈" label="Meilleur ROI"
+                  value={`${bestROI.roi}%`} color="text-cyan-400"
+                  sub={`${bestROI.code} — ${bestROI.date}`} />
+              </>}
+            </div>
+          </div>
+
+          {/* Tournois */}
+          <div>
+            <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Tournois</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {playedTournaments.length === 0 ? empty : <>
+                <RecordCard emoji="💰" label="Tournoi le plus profitable"
+                  value={`+${bestTourn.profit.toFixed(2)}€`} color="text-green-400"
+                  sub={`${bestTourn.session} — ${bestTourn.date} — ${bestTourn.room}`}
+                  badge={`${bestTourn.buyIn}€ ${bestTourn.format}`} badgeColor="bg-green-900 text-green-300" />
+                <RecordCard emoji="🔥" label="Plus gros gains bruts"
+                  value={`${biggestGain.gains}€`} color="text-yellow-400"
+                  sub={`${biggestGain.session} — ${biggestGain.date} — ${biggestGain.room}`}
+                  badge={`${biggestGain.buyIn}€ ${biggestGain.format}`} badgeColor="bg-yellow-900 text-yellow-300" />
+                <RecordCard emoji="📉" label="Tournoi le plus perdant"
+                  value={`${worstTourn.profit.toFixed(2)}€`} color="text-red-400"
+                  sub={`${worstTourn.session} — ${worstTourn.date} — ${worstTourn.room}`}
+                  badge={`${worstTourn.buyIn}€ ${worstTourn.format}`} badgeColor="bg-red-900 text-red-300" />
+              </>}
+            </div>
+          </div>
+
+          {/* Séries */}
+          <div>
+            <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Séries</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {sessionsWithProfit.length === 0 ? empty : <>
+                <RecordCard emoji="🔥" label="Série gagnante en cours"
+                  value={`${curStreak} session${curStreak > 1 ? 's' : ''}`}
+                  color={curStreak > 0 ? 'text-green-400' : 'text-gray-500'} />
+                <RecordCard emoji="🏅" label="Meilleure série gagnante"
+                  value={`${bestStreak} session${bestStreak > 1 ? 's' : ''}`}
+                  color="text-yellow-400" />
+                <RecordCard emoji="❄️" label="Série perdante en cours"
+                  value={`${curLose} session${curLose > 1 ? 's' : ''}`}
+                  color={curLose > 0 ? 'text-red-400' : 'text-gray-500'} />
+                <RecordCard emoji="📊" label="Pire série perdante"
+                  value={`${bestLose} session${bestLose > 1 ? 's' : ''}`}
+                  color="text-orange-400" />
+              </>}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function DashboardTab({ sessions, playedTournaments }) {
       const [dashTab, setDashTab]     = useState('tournois');
       const [period, setPeriod]       = useState('30');
@@ -2033,6 +2173,7 @@
         { id:'grid',      emoji:'📅', label:'Grille du Jour'     },
         { id:'sessions',  emoji:'🎯', label:'Sessions & Tournois'},
         { id:'dashboard', emoji:'📊', label:'Dashboard'          },
+        { id:'records',   emoji:'🏆', label:'Records'            },
       ];
 
       return (
@@ -2085,6 +2226,7 @@
             <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} /></div>
             <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
+            <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
           </main>
 
           {/* ── Nav mobile (bottom) ── */}
