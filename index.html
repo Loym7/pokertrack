@@ -1059,8 +1059,23 @@
       const [sub, setSub]           = useState('grind');
       const [showForm, setShow]     = useState(false);
       const [page, setPage]         = useState(1);
-      const [confirmDel, setConfirm] = useState(null); // session à supprimer
+      const [confirmDel, setConfirm] = useState(null);
+      const [editId, setEditId]     = useState(null);
+      const [editForm, setEditForm] = useState({});
       const PER_PAGE = 15;
+
+      const startEdit = s => { setEditId(s.id); setEditForm({ start: s.start, end: s.end }); };
+      const cancelEdit = () => { setEditId(null); setEditForm({}); };
+      const saveEdit = () => {
+        setSessions(prev => prev.map(s => s.id === editId ? {
+          ...s,
+          start: editForm.start,
+          end: editForm.end,
+          duration: calcDuration(editForm.start, editForm.end),
+          typeSession: typeSession(editForm.start),
+        } : s));
+        setEditId(null); setEditForm({});
+      };
 
       const emptyF = { type:'Grind', date:todayStr, start:'18:00', end:'23:00', hands:0 };
       const [form, setForm] = useState(emptyF);
@@ -1148,16 +1163,37 @@
                   </thead>
                   <tbody>
                     {[...sessions].filter(s=>s.type==='Grind').reverse().map(s=>(
-                      <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
+                      <tr key={s.id} className={`border-t border-gray-700 ${editId===s.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}>
                         <td className="px-3 py-2 font-mono text-green-400 font-semibold">{s.code}</td>
                         <td className="px-3 py-2 text-gray-300">{s.date}</td>
-                        <td className="px-3 py-2 text-gray-400">{s.typeSession}</td>
-                        <td className="px-3 py-2 text-gray-300">{s.start}</td>
-                        <td className="px-3 py-2 text-gray-300">{s.end}</td>
-                        <td className="px-3 py-2 text-gray-300 font-medium">{s.duration}</td>
+                        <td className="px-3 py-2 text-gray-400">{editId===s.id ? typeSession(editForm.start) : s.typeSession}</td>
                         <td className="px-3 py-2">
-                          <button onClick={() => setConfirm(s)}
-                            className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                          {editId===s.id
+                            ? <input type="time" value={editForm.start} onChange={e => setEditForm(f=>({...f,start:e.target.value}))}
+                                className="bg-gray-700 border border-green-500 rounded px-1 py-0.5 text-white text-xs w-24 focus:outline-none" />
+                            : <span className="text-gray-300">{s.start}</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {editId===s.id
+                            ? <input type="time" value={editForm.end} onChange={e => setEditForm(f=>({...f,end:e.target.value}))}
+                                className="bg-gray-700 border border-green-500 rounded px-1 py-0.5 text-white text-xs w-24 focus:outline-none" />
+                            : <span className="text-gray-300">{s.end}</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-300 font-medium">
+                          {editId===s.id ? calcDuration(editForm.start, editForm.end) : s.duration}
+                        </td>
+                        <td className="px-3 py-2">
+                          {editId===s.id ? (
+                            <div className="flex gap-1">
+                              <button onClick={saveEdit} className="text-green-400 hover:text-green-300 text-xs px-2 py-0.5 rounded hover:bg-green-900/30 transition-colors">✓</button>
+                              <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-200 text-xs px-2 py-0.5 rounded hover:bg-gray-700 transition-colors">✕</button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1">
+                              <button onClick={() => startEdit(s)} className="text-blue-400 hover:text-blue-300 text-xs px-2 py-0.5 rounded hover:bg-blue-900/30 transition-colors">✎</button>
+                              <button onClick={() => setConfirm(s)} className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1214,15 +1250,36 @@
                   </thead>
                   <tbody>
                     {[...sessions].filter(s=>s.type==='Travail').reverse().map(s=>(
-                      <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
+                      <tr key={s.id} className={`border-t border-gray-700 ${editId===s.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}>
                         <td className="px-3 py-2 font-mono text-blue-400 font-semibold">{s.code}</td>
                         <td className="px-3 py-2 text-gray-300">{s.date}</td>
-                        <td className="px-3 py-2 text-gray-300">{s.start}</td>
-                        <td className="px-3 py-2 text-gray-300">{s.end}</td>
-                        <td className="px-3 py-2 text-gray-300 font-medium">{s.duration}</td>
                         <td className="px-3 py-2">
-                          <button onClick={() => setConfirm(s)}
-                            className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                          {editId===s.id
+                            ? <input type="time" value={editForm.start} onChange={e => setEditForm(f=>({...f,start:e.target.value}))}
+                                className="bg-gray-700 border border-blue-500 rounded px-1 py-0.5 text-white text-xs w-24 focus:outline-none" />
+                            : <span className="text-gray-300">{s.start}</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {editId===s.id
+                            ? <input type="time" value={editForm.end} onChange={e => setEditForm(f=>({...f,end:e.target.value}))}
+                                className="bg-gray-700 border border-blue-500 rounded px-1 py-0.5 text-white text-xs w-24 focus:outline-none" />
+                            : <span className="text-gray-300">{s.end}</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-300 font-medium">
+                          {editId===s.id ? calcDuration(editForm.start, editForm.end) : s.duration}
+                        </td>
+                        <td className="px-3 py-2">
+                          {editId===s.id ? (
+                            <div className="flex gap-1">
+                              <button onClick={saveEdit} className="text-green-400 hover:text-green-300 text-xs px-2 py-0.5 rounded hover:bg-green-900/30 transition-colors">✓</button>
+                              <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-200 text-xs px-2 py-0.5 rounded hover:bg-gray-700 transition-colors">✕</button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1">
+                              <button onClick={() => startEdit(s)} className="text-blue-400 hover:text-blue-300 text-xs px-2 py-0.5 rounded hover:bg-blue-900/30 transition-colors">✎</button>
+                              <button onClick={() => setConfirm(s)} className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -2024,10 +2081,10 @@
 
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
-            {activeTab==='library'   && <GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} />}
-            {activeTab==='grid'      && <DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} />}
-            {activeTab==='sessions'  && <SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} />}
-            {activeTab==='dashboard' && <DashboardTab sessions={sessions} playedTournaments={played} />}
+            <div className={activeTab==='library'   ? '' : 'hidden'}><GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} /></div>
+            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} /></div>
+            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
+            <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
           </main>
 
           {/* ── Nav mobile (bottom) ── */}
