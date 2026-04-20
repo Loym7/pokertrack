@@ -826,7 +826,7 @@
     // ─── TAB 2 — GRILLE DU JOUR ───────────────────────────────────
     const EMPTY_PONCT = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO', priority:'Niv 1', entardive:'' };
 
-    function DailyGridTab({ savedGrids, setPlayedTournaments, sessions, setSessions }) {
+    function DailyGridTab({ savedGrids, setPlayedTournaments, sessions, setSessions, playedTournaments }) {
       const [date, setDate]           = useState(todayStr);
       const [typeSession, setTypeSession] = useState('Soir');
       const [selectedGridId, setSelId] = useState('');
@@ -835,6 +835,7 @@
       const [showPonct, setShowP]     = useState(false);
       const [ponct, setPonct]         = useState(EMPTY_PONCT);
       const [validated, setVal]       = useState(false);
+      const [summary, setSummary]     = useState(null);
       const dragIdx = useRef(null);
 
       const loadGrid = () => {
@@ -888,14 +889,38 @@
           setSessions(prev => [...prev, sess]);
         }
 
-        setPlayedTournaments(prev => [...prev, ...played.map(r => ({
+        const newTourns = played.map(r => ({
           id: uid(), date, session: sess.code,
           room: r.room, buyIn: r.buyIn, entry: true, reEntry: r.reEntry,
           field: r.field, format: r.format, itm: r.itm,
           gains: Number(r.gains), nbEntry: r.reEntry ? 2 : 1,
           profit: Math.round((Number(r.gains) - r.buyIn * (r.reEntry ? 2 : 1)) * 100) / 100,
-        }))]);
+        }));
+        setPlayedTournaments(prev => [...prev, ...newTourns]);
         setVal(true);
+
+        // ── Calcul du résumé ──
+        const invest  = newTourns.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
+        const gains   = newTourns.reduce((a, t) => a + t.gains, 0);
+        const profit  = Math.round((gains - invest) * 100) / 100;
+        const nb      = newTourns.length;
+        const abi     = Math.round((invest / nb) * 100) / 100;
+        const itmN    = newTourns.filter(t => t.itm).length;
+        const totalEntries = newTourns.reduce((a, t) => a + t.nbEntry, 0);
+        const itmRate = Math.round(itmN / totalEntries * 100);
+        const reEntries = newTourns.reduce((a, t) => a + Math.max(0, t.nbEntry - 1), 0);
+        const roi     = invest > 0 ? Math.round(profit / invest * 100) : 0;
+
+        // Percentile : position parmi les sessions précédentes
+        const grindSess = sessions.filter(s => s.type === 'Grind');
+        const pastProfits = grindSess.map(s => {
+          const t = playedTournaments.filter(t => t.session === s.code);
+          return t.reduce((a, t) => a + t.profit, 0);
+        }).filter((_, i) => grindSess[i].code !== sess.code);
+        const below = pastProfits.filter(p => p < profit).length;
+        const pct   = pastProfits.length > 0 ? Math.round(below / pastProfits.length * 100) : null;
+
+        setSummary({ invest, gains, profit, nb, abi, itmRate, itmN, totalEntries, reEntries, roi, pct, sessCode: sess.code });
       };
 
       const onDragStart = (e, i) => { dragIdx.current = i; e.dataTransfer.effectAllowed = 'move'; };
@@ -914,6 +939,7 @@
       };
 
       return (
+      <>
         <div className="p-4 space-y-4">
           <div className="flex flex-wrap items-end gap-3">
             <div>
@@ -982,67 +1008,93 @@
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto rounded-lg border border-gray-700">
-                <table className="w-full text-sm text-left" style={{ minWidth: '1050px' }}>
-                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                    <tr>
-                      <th className="px-2 py-2 w-8">☆</th>
-                      <th className="px-2 py-2">Tard.</th>
-                      <th className="px-2 py-2">Prio</th>
-                      <th className="px-2 py-2">Heure</th>
-                      <th className="px-2 py-2">Tournoi</th>
-                      <th className="px-2 py-2">Room</th>
-                      <th className="px-2 py-2">BI</th>
-                      <th className="px-2 py-2 text-center">Entry</th>
-                      <th className="px-2 py-2 text-center">Re-Entry</th>
-                      <th className="px-2 py-2">Field</th>
-                      <th className="px-2 py-2">Fmt</th>
-                      <th className="px-2 py-2 text-center">ITM</th>
-                      <th className="px-2 py-2">Gains (€)</th>
-                      <th className="px-2 py-2 w-6"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, i) => (
-                      <tr key={r._gid}
-                        draggable
-                        onDragStart={e => onDragStart(e, i)}
-                        onDragOver={onDragOver}
-                        onDrop={e => onDrop(e, i)}
-                        style={{ borderLeft: r.favorite ? '3px solid #facc15' : '3px solid transparent' }}
-                        className={`border-t border-gray-700 cursor-grab active:cursor-grabbing transition-colors
-                          ${r.entry ? 'bg-green-900/20' : 'hover:bg-gray-800/50'}`}>
-                        <td className="px-2 py-1.5">
-                          <button onClick={() => upd(r._gid, 'favorite', !r.favorite)}
-                            className={`text-lg leading-none transition-colors ${r.favorite ? 'text-yellow-400' : 'text-gray-700 hover:text-yellow-600'}`}>★</button>
-                        </td>
-                        <td className="px-2 py-1.5 text-gray-500 text-xs">{r.entardive || '—'}</td>
-                        <td className="px-2 py-1.5"><Badge cls={PRIO_CLS[r.priority]}>{r.priority}</Badge></td>
-                        <td className="px-2 py-1.5 text-gray-300">{r.startTime}</td>
-                        <td className="px-2 py-1.5 font-medium text-white">{r.name}</td>
-                        <td className="px-2 py-1.5"><Badge cls={ROOM_CLS[r.room]}>{r.room}</Badge></td>
-                        <td className="px-2 py-1.5 text-gray-300 whitespace-nowrap">{r.buyIn}€</td>
-                        <td className="px-2 py-1.5 text-center"><Cb checked={r.entry} onChange={v => upd(r._gid, 'entry', v)} /></td>
-                        <td className="px-2 py-1.5 text-center"><Cb checked={r.reEntry} onChange={v => upd(r._gid, 'reEntry', v)} /></td>
-                        <td className="px-2 py-1.5 text-gray-400 text-xs">{r.field}</td>
-                        <td className="px-2 py-1.5"><Badge cls={FMT_CLS[r.format]}>{r.format}</Badge></td>
-                        <td className="px-2 py-1.5 text-center"><Cb checked={r.itm} onChange={v => upd(r._gid, 'itm', v)} /></td>
-                        <td className="px-2 py-1.5">
-                          <input type="number" value={r.gains}
-                            onChange={e => upd(r._gid, 'gains', e.target.value)}
-                            className="w-20 bg-gray-700 border border-gray-600 rounded px-2 py-0.5 text-sm text-white focus:outline-none focus:border-green-500" />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <button onClick={() => del(r._gid)} className="text-gray-600 hover:text-red-400 transition-colors text-sm">✕</button>
-                        </td>
-                      </tr>
+              {/* ── Zone 1 : Grille template ── */}
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                  Disponibles — {rows.filter(r => !r.entry).length} tournois
+                </p>
+                {rows.filter(r => !r.entry).length === 0
+                  ? <p className="text-xs text-gray-600 italic">Tous les tournois sont en jeu</p>
+                  : <div className="flex flex-wrap gap-2">
+                    {rows.filter(r => !r.entry).map(r => (
+                      <button key={r._gid}
+                        onClick={() => upd(r._gid, 'entry', true)}
+                        className="group flex items-center gap-2 bg-gray-800 border border-gray-700 hover:border-green-500 hover:bg-green-900/20 rounded-lg px-3 py-2 text-left transition-all">
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {r.favorite && <span className="text-yellow-400 text-xs">★</span>}
+                            <span className="text-white text-xs font-semibold truncate max-w-32">{r.name}</span>
+                            <Badge cls={ROOM_CLS[r.room]}>{r.room}</Badge>
+                            <Badge cls={FMT_CLS[r.format]}>{r.format}</Badge>
+                            <Badge cls={PRIO_CLS[r.priority]}>{r.priority}</Badge>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-gray-400 text-xs">{r.startTime}</span>
+                            <span className="text-cyan-400 text-xs font-medium">{r.buyIn}€</span>
+                            <span className="text-gray-500 text-xs">{r.field}</span>
+                          </div>
+                        </div>
+                        <span className="text-green-500 group-hover:text-green-300 text-lg font-bold ml-1 flex-shrink-0">+</span>
+                      </button>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                }
               </div>
+
+              {/* ── Zone 2 : En jeu ── */}
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-green-400 uppercase tracking-wide">
+                  En jeu — {rows.filter(r => r.entry).length} tournois
+                </p>
+                {rows.filter(r => r.entry).length === 0
+                  ? <p className="text-xs text-gray-600 italic">Cliquez sur un tournoi ci-dessus pour le lancer</p>
+                  : <div className="overflow-x-auto rounded-lg border border-green-900">
+                    <table className="w-full text-sm text-left" style={{ minWidth: '620px' }}>
+                      <thead className="bg-green-950/50 text-gray-400 text-xs uppercase">
+                        <tr>
+                          <th className="px-2 py-2">Tournoi</th>
+                          <th className="px-2 py-2">Room</th>
+                          <th className="px-2 py-2">BI</th>
+                          <th className="px-2 py-2 text-center">Re-Entry</th>
+                          <th className="px-2 py-2 text-center">ITM</th>
+                          <th className="px-2 py-2">Gains (€)</th>
+                          <th className="px-2 py-2 w-6"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.filter(r => r.entry).map(r => (
+                          <tr key={r._gid} className="border-t border-green-900/50 hover:bg-gray-800/50">
+                            <td className="px-2 py-2">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-white font-medium text-xs">{r.name}</span>
+                                <Badge cls={FMT_CLS[r.format]}>{r.format}</Badge>
+                              </div>
+                              <span className="text-gray-500 text-xs">{r.startTime}</span>
+                            </td>
+                            <td className="px-2 py-2"><Badge cls={ROOM_CLS[r.room]}>{r.room}</Badge></td>
+                            <td className="px-2 py-2 text-cyan-400 font-medium">{r.buyIn}€</td>
+                            <td className="px-2 py-2 text-center"><Cb checked={r.reEntry} onChange={v => upd(r._gid, 'reEntry', v)} /></td>
+                            <td className="px-2 py-2 text-center"><Cb checked={r.itm} onChange={v => upd(r._gid, 'itm', v)} /></td>
+                            <td className="px-2 py-2">
+                              <input type="number" value={r.gains}
+                                onChange={e => upd(r._gid, 'gains', e.target.value)}
+                                className="w-20 bg-gray-700 border border-gray-600 rounded px-2 py-0.5 text-sm text-white focus:outline-none focus:border-green-500" />
+                            </td>
+                            <td className="px-2 py-2">
+                              <button onClick={() => upd(r._gid, 'entry', false)}
+                                className="text-gray-600 hover:text-orange-400 transition-colors text-sm" title="Retirer de la sélection">↩</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                }
+              </div>
+
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-500">
-                  {rows.filter(r => r.entry).length} / {rows.length} tournois sélectionnés
+                  {rows.filter(r => r.entry).length} / {rows.length} tournois en jeu
                 </span>
                 <Btn onClick={validate} cls="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 text-base">
                   ✓ Valider la journée
@@ -1051,6 +1103,68 @@
             </>
           )}
         </div>
+
+        {/* ── Popup récap session ── */}
+        {summary && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-5">
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-white">Récap session <span className="text-green-400 font-mono">{summary.sessCode}</span></h3>
+                  <p className="text-xs text-gray-500">{date}</p>
+                </div>
+                <span className={`text-2xl font-bold ${summary.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {summary.profit >= 0 ? '+' : ''}{summary.profit.toFixed(2)}€
+                </span>
+              </div>
+
+              {/* Stats grid */}
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label:'Dépenses', value:`${summary.invest.toFixed(2)}€`, color:'text-red-300' },
+                  { label:'Gains bruts', value:`${summary.gains.toFixed(2)}€`, color:'text-green-300' },
+                  { label:'Tournois joués', value:summary.nb, color:'text-white' },
+                  { label:'Re-entries', value:summary.reEntries, color:'text-orange-400' },
+                  { label:'ABI', value:`${summary.abi.toFixed(2)}€`, color:'text-cyan-400' },
+                  { label:'ROI', value:`${summary.roi}%`, color: summary.roi >= 0 ? 'text-green-400' : 'text-red-400' },
+                  { label:'ITM', value:`${summary.itmN}/${summary.totalEntries} (${summary.itmRate}%)`, color:'text-yellow-400' },
+                  { label:'Résultat net', value:`${summary.profit >= 0 ? '+' : ''}${summary.profit.toFixed(2)}€`, color: summary.profit >= 0 ? 'text-green-400' : 'text-red-400' },
+                ].map(({label, value, color}) => (
+                  <div key={label} className="bg-gray-900 rounded-lg px-4 py-3">
+                    <p className="text-xs text-gray-500 mb-1">{label}</p>
+                    <p className={`text-lg font-bold ${color}`}>{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Percentile */}
+              {summary.pct !== null && (
+                <div className="bg-gray-900 rounded-lg px-4 py-3">
+                  <p className="text-xs text-gray-500 mb-1">Classement parmi tes sessions</p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 bg-gray-700 rounded-full h-2.5">
+                      <div className={`h-2.5 rounded-full transition-all ${summary.pct >= 50 ? 'bg-green-500' : 'bg-red-500'}`}
+                        style={{ width:`${summary.pct}%` }} />
+                    </div>
+                    <span className={`text-lg font-bold ${summary.pct >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+                      Top {100 - summary.pct}%
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-1">
+                    Meilleure que {summary.pct}% de tes sessions précédentes
+                  </p>
+                </div>
+              )}
+
+              <button onClick={() => setSummary(null)}
+                className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg transition-colors">
+                Fermer
+              </button>
+            </div>
+          </div>
+        )}
+      </>
       );
     }
 
@@ -2277,7 +2391,7 @@
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
             <div className={activeTab==='library'   ? '' : 'hidden'}><GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} /></div>
-            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} /></div>
+            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} /></div>
             <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
