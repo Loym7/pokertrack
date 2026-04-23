@@ -1278,7 +1278,7 @@
                     ))}</tr>
                   </thead>
                   <tbody>
-                    {[...sessions].filter(s=>s.type==='Grind').reverse().map(s=>{
+                    {[...sessions].filter(s=>s.type==='Grind').sort((a,b)=>b.date.localeCompare(a.date)).map(s=>{
                       const sessProfit = Math.round(playedTournaments.filter(t=>t.session===s.code).reduce((a,t)=>a+t.profit,0)*100)/100;
                       const hasTourns  = playedTournaments.some(t=>t.session===s.code);
                       return (
@@ -1376,7 +1376,7 @@
                     ))}</tr>
                   </thead>
                   <tbody>
-                    {[...sessions].filter(s=>s.type==='Travail').reverse().map(s=>(
+                    {[...sessions].filter(s=>s.type==='Travail').sort((a,b)=>b.date.localeCompare(a.date)).map(s=>(
                       <tr key={s.id} className={`border-t border-gray-700 ${editId===s.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}>
                         <td className="px-3 py-2 font-mono text-blue-400 font-semibold">{s.code}</td>
                         <td className="px-3 py-2 text-gray-300">{s.date}</td>
