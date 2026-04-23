@@ -2347,6 +2347,36 @@
         return () => window.removeEventListener('pt-fb-error', h);
       }, []);
 
+      // ── Réparation automatique des sessions orphelines ──
+      // Si des tournois pointent vers un code session qui n'existe plus,
+      // on recrée automatiquement la session manquante avec le bon code.
+      useEffect(() => {
+        if (!played.length) return;
+        const existingCodes = new Set(sessions.map(s => s.code));
+        const orphaned = [...new Set(played.map(t => t.session))]
+          .filter(code => code && !existingCodes.has(code));
+        if (!orphaned.length) return;
+        setSessions(prev => {
+          const prevCodes = new Set(prev.map(s => s.code));
+          const toAdd = orphaned
+            .filter(code => !prevCodes.has(code))
+            .map(code => {
+              const date = played.filter(t => t.session === code)[0]?.date || todayStr;
+              return {
+                id: uid(),
+                code,
+                date,
+                type: code.startsWith('G') ? 'Grind' : 'Travail',
+                start: '', end: '',
+                typeSession: 'Jour',
+                hands: 0,
+                duration: '',
+              };
+            });
+          return toAdd.length ? [...prev, ...toAdd] : prev;
+        });
+      }, [played, sessions]);
+
       if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
 
       const TABS = [
