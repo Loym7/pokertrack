@@ -2232,8 +2232,9 @@
     // ── usePersist : localStorage (cache offline) + Firestore (sync multi-appareils) ──
     function usePersist(key, initial) {
       const [state, setState] = useState(() => lsGet(key, initial));
-      const ready    = useRef(false);  // Firestore a répondu au moins une fois
-      const skipNext = useRef(false);  // évite d'écrire ce qu'on vient de lire
+      const [loaded, setLoaded] = useState(false); // true dès que Firebase a répondu
+      const ready    = useRef(false);
+      const skipNext = useRef(false);
 
       // Écoute temps réel Firestore
       useEffect(() => {
@@ -2245,12 +2246,12 @@
               setState(val);
               lsSet(key, val);
             } else {
-              // Première connexion : on pousse les données locales vers Firestore
               db.collection('pt').doc(key).set({ v: lsGet(key, initial) }).catch(() => {});
             }
             ready.current = true;
+            setLoaded(true);
           },
-          () => { ready.current = true; } // hors-ligne : on reste sur localStorage
+          () => { ready.current = true; setLoaded(true); }
         );
         return unsub;
       }, []);
@@ -2265,7 +2266,7 @@
         });
       }, [state]);
 
-      return [state, setState];
+      return [state, setState, loaded];
     }
 
     // ─── LOGIN ────────────────────────────────────────────────────
@@ -2328,10 +2329,10 @@
     function PokerTracker() {
       const [unlocked, setUnlocked] = useState(() => localStorage.getItem(PT_AUTH_KEY) === PT_PWD_HASH);
       const [activeTab, setActiveTab]       = useState('library');
-      const [savedGrids, setSavedGrids]     = usePersist(LS_KEYS.grids,    INIT_GRIDS);
-      const [sessions,   setSessions]       = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
-      const [played,     setPlayed]         = usePersist(LS_KEYS.played,    INIT_PLAYED);
-      const [hwm,        setHwm]            = usePersist('pt_hwm',          { g: 0, t: 0 });
+      const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
+      const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
+      const [played,     setPlayed,     playedLoaded] = usePersist(LS_KEYS.played,    INIT_PLAYED);
+      const [hwm,        setHwm]                      = usePersist('pt_hwm',          { g: 0, t: 0 });
       const [online, setOnline]             = useState(navigator.onLine);
       const [fbError, setFbError]           = useState(false);
       useEffect(() => {
@@ -2348,10 +2349,9 @@
       }, []);
 
       // ── Réparation automatique des sessions orphelines ──
-      // Si des tournois pointent vers un code session qui n'existe plus,
-      // on recrée automatiquement la session manquante avec le bon code.
+      // Attend que Firebase ait répondu pour les deux collections avant de réparer.
       useEffect(() => {
-        if (!played.length) return;
+        if (!sessLoaded || !playedLoaded) return;
         const existingCodes = new Set(sessions.map(s => s.code));
         const orphaned = [...new Set(played.map(t => t.session))]
           .filter(code => code && !existingCodes.has(code));
@@ -2375,7 +2375,7 @@
             });
           return toAdd.length ? [...prev, ...toAdd] : prev;
         });
-      }, [played, sessions]);
+      }, [sessLoaded, playedLoaded, sessions, played]);
 
       if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
 
