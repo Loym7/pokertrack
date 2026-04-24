@@ -824,7 +824,7 @@
     // ─── TAB 2 — GRILLE DU JOUR ───────────────────────────────────
     const EMPTY_PONCT = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO', priority:'Niv 1', entardive:'' };
 
-    function DailyGridTab({ savedGrids, setPlayedTournaments, sessions, setSessions, playedTournaments, hwm, setHwm }) {
+    function DailyGridTab({ savedGrids, setPlayedTournaments, sessions, setSessions, playedTournaments }) {
       const [date, setDate]           = useState(todayStr);
       const [typeSession, setTypeSession] = useState('Soir');
       const [selectedGridId, setSelId] = useState('');
@@ -869,12 +869,10 @@
         // Trouve ou crée la session Grind pour cette date + typeSession
         let sess = sessions.find(s => s.date === date && s.type === 'Grind' && s.typeSession === typeSession);
         if (!sess) {
-          const maxExisting = sessions.filter(s => s.type === 'Grind').reduce((max, s) => {
+          const newNum = sessions.filter(s => s.type === 'Grind').reduce((max, s) => {
             const n = parseInt(s.code.replace('G', ''), 10);
             return isNaN(n) ? max : Math.max(max, n);
-          }, 0);
-          const newNum = Math.max(hwm.g, maxExisting) + 1;
-          setHwm(prev => ({ ...prev, g: newNum }));
+          }, 0) + 1;
           sess = {
             id: uid(),
             code: `G${newNum}`,
@@ -1168,7 +1166,7 @@
     }
 
     // ─── TAB 3 — SESSIONS & TOURNOIS ──────────────────────────────
-    function SessionsTab({ sessions, setSessions, playedTournaments, setPlayed, hwm, setHwm }) {
+    function SessionsTab({ sessions, setSessions, playedTournaments, setPlayed }) {
       const [sub, setSub]           = useState('grind');
       const [showForm, setShow]     = useState(false);
       const [page, setPage]         = useState(1);
@@ -1197,14 +1195,11 @@
       const set = k => v => setForm(f => ({ ...f, [k]: v }));
 
       const save = () => {
-        const prefix   = form.type === 'Grind' ? 'G' : 'T';
-        const hwmKey   = form.type === 'Grind' ? 'g' : 't';
-        const maxExist = sessions.filter(s => s.type === form.type).reduce((max, s) => {
+        const prefix  = form.type === 'Grind' ? 'G' : 'T';
+        const newNum  = sessions.filter(s => s.type === form.type).reduce((max, s) => {
           const n = parseInt(s.code.replace(/[GT]/, ''), 10);
           return isNaN(n) ? max : Math.max(max, n);
-        }, 0);
-        const newNum = Math.max(hwm[hwmKey], maxExist) + 1;
-        setHwm(prev => ({ ...prev, [hwmKey]: newNum }));
+        }, 0) + 1;
         setSessions(prev => [...prev, {
           id: uid(), code: `${prefix}${newNum}`, ...form,
           hands: Number(form.hands),
@@ -1301,7 +1296,10 @@
                     ))}</tr>
                   </thead>
                   <tbody>
-                    {[...sessions].filter(s=>s.type==='Grind').sort((a,b)=>b.date.localeCompare(a.date)).map(s=>{
+                    {[...sessions].filter(s=>s.type==='Grind').sort((a,b)=>{
+                      const d=b.date.localeCompare(a.date); if(d!==0)return d;
+                      return (parseInt(b.code.replace(/[GT]/,''),10)||0)-(parseInt(a.code.replace(/[GT]/,''),10)||0);
+                    }).map(s=>{
                       const sessProfit = Math.round(playedTournaments.filter(t=>t.session===s.code).reduce((a,t)=>a+t.profit,0)*100)/100;
                       const hasTourns  = playedTournaments.some(t=>t.session===s.code);
                       return (
@@ -1399,7 +1397,10 @@
                     ))}</tr>
                   </thead>
                   <tbody>
-                    {[...sessions].filter(s=>s.type==='Travail').sort((a,b)=>b.date.localeCompare(a.date)).map(s=>(
+                    {[...sessions].filter(s=>s.type==='Travail').sort((a,b)=>{
+                      const d=b.date.localeCompare(a.date); if(d!==0)return d;
+                      return (parseInt(b.code.replace(/[GT]/,''),10)||0)-(parseInt(a.code.replace(/[GT]/,''),10)||0);
+                    }).map(s=>(
                       <tr key={s.id} className={`border-t border-gray-700 ${editId===s.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}>
                         <td className="px-3 py-2 font-mono text-blue-400 font-semibold">{s.code}</td>
                         <td className="px-3 py-2 text-gray-300">{s.date}</td>
@@ -2385,7 +2386,6 @@
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
       const [played,     setPlayed,     playedLoaded] = usePersist(LS_KEYS.played,    INIT_PLAYED);
-      const [hwm,        setHwm]                      = usePersist('pt_hwm',          { g: 0, t: 0 });
       const [online, setOnline]             = useState(navigator.onLine);
       const [fbError, setFbError]           = useState(false);
       useEffect(() => {
@@ -2475,7 +2475,7 @@
               <button onClick={() => { localStorage.removeItem(PT_AUTH_KEY); setUnlocked(false); }}
                 className="text-gray-600 hover:text-gray-400 transition-colors text-sm" title="Se déconnecter">🔒</button>
               {/* Reset — masqué sur mobile */}
-              <button onClick={() => { if (confirm('Réinitialiser toutes les données ?')) { setSavedGrids(INIT_GRIDS); setSessions(INIT_SESSIONS); setPlayed(INIT_PLAYED); setHwm({ g: 0, t: 0 }); }}}
+              <button onClick={() => { if (confirm('Réinitialiser toutes les données ?')) { setSavedGrids(INIT_GRIDS); setSessions(INIT_SESSIONS); setPlayed(INIT_PLAYED); }}}
                 className="hidden sm:inline text-xs text-gray-600 hover:text-red-400 transition-colors" title="Reset">↺</button>
             </div>
           </header>
@@ -2494,8 +2494,8 @@
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
             <div className={activeTab==='library'   ? '' : 'hidden'}><GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} /></div>
-            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} hwm={hwm} setHwm={setHwm} /></div>
-            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} hwm={hwm} setHwm={setHwm} /></div>
+            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} /></div>
+            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
           </main>
