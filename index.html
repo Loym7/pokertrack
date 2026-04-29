@@ -1207,11 +1207,14 @@
         setForm(emptyF); setShow(false);
       };
 
-      const sortedTourns = useMemo(() => [...playedTournaments].sort((a, b) => {
-        const an = parseInt((a.session||'').replace(/[A-Z]/g,''), 10) || 0;
-        const bn = parseInt((b.session||'').replace(/[A-Z]/g,''), 10) || 0;
-        return bn - an;
-      }), [playedTournaments]);
+      const sortedTourns = useMemo(() => {
+        setPage(1);
+        return [...playedTournaments].sort((a, b) => {
+          const an = parseInt((a.session||'').replace(/[A-Za-z]/g,''), 10) || 0;
+          const bn = parseInt((b.session||'').replace(/[A-Za-z]/g,''), 10) || 0;
+          return bn - an;
+        });
+      }, [playedTournaments]);
       const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
       const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
@@ -1220,7 +1223,7 @@
         <div className="p-4 space-y-4">
           <div className="flex gap-1 border-b border-gray-700">
             {[['grind','Sessions Grind'],['travail','Sessions Travail'],['tournois','Tournois Joués']].map(([k,l]) => (
-              <button key={k} onClick={() => setSub(k)}
+              <button key={k} onClick={() => { setSub(k); setPage(1); }}
                 className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
                   ${sub===k
                     ? k==='grind'   ? 'border-green-500 text-green-400'
@@ -1456,8 +1459,8 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {pageData.map(t => (
-                      <tr key={t.id} className={`border-t border-gray-700 hover:bg-gray-800/50
+                    {pageData.map((t, idx) => (
+                      <tr key={`${t.id}-${idx}`} className={`border-t border-gray-700 hover:bg-gray-800/50
                         ${t.profit > 0 ? 'bg-green-950/40' : t.profit < 0 ? 'bg-red-950/30' : ''}`}>
                         <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
                         <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
@@ -2136,8 +2139,8 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {pageData.map(t => (
-                    <tr key={t.id} className={`border-t border-gray-700 hover:bg-gray-700/30
+                  {pageData.map((t, idx) => (
+                    <tr key={`${t.id}-${idx}`} className={`border-t border-gray-700 hover:bg-gray-700/30
                       ${t.profit>0?'bg-green-950/30':t.profit<0?'bg-red-950/20':''}`}>
                       <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
                       <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
