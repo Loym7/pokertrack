@@ -1208,15 +1208,16 @@
       };
 
       const sortedTourns = useMemo(() => {
-        setPage(1);
         return [...playedTournaments].sort((a, b) => {
           const an = parseInt((a.session||'').replace(/[A-Za-z]/g,''), 10) || 0;
           const bn = parseInt((b.session||'').replace(/[A-Za-z]/g,''), 10) || 0;
           return bn - an;
         });
       }, [playedTournaments]);
-      const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
-      const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+      useEffect(() => { setPage(1); }, [sortedTourns]);
+      const totalPages   = Math.ceil(sortedTourns.length / PER_PAGE);
+      const pageStartIdx = (page - 1) * PER_PAGE;
+      const pageData     = sortedTourns.slice(pageStartIdx, pageStartIdx + PER_PAGE);
 
       return (
         <>
@@ -1459,8 +1460,8 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {pageData.map((t, idx) => (
-                      <tr key={`${t.id}-${idx}`} className={`border-t border-gray-700 hover:bg-gray-800/50
+                    {pageData.map((t, localIdx) => (
+                      <tr key={pageStartIdx + localIdx} className={`border-t border-gray-700 hover:bg-gray-800/50
                         ${t.profit > 0 ? 'bg-green-950/40' : t.profit < 0 ? 'bg-red-950/30' : ''}`}>
                         <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
                         <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
@@ -1522,9 +1523,9 @@
               </div>
               {totalPages > 1 && (
                 <div className="flex gap-2 items-center justify-center">
-                  <Btn onClick={() => setPage(p => Math.max(1,p-1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===1}>←</Btn>
+                  <Btn onClick={() => { setPage(p => Math.max(1,p-1)); setEditTournId(null); }} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===1}>←</Btn>
                   <span className="text-xs text-gray-400">{page} / {totalPages}</span>
-                  <Btn onClick={() => setPage(p => Math.min(totalPages,p+1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===totalPages}>→</Btn>
+                  <Btn onClick={() => { setPage(p => Math.min(totalPages,p+1)); setEditTournId(null); }} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===totalPages}>→</Btn>
                 </div>
               )}
             </div>
