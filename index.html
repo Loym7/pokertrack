@@ -1207,16 +1207,15 @@
         setForm(emptyF); setShow(false);
       };
 
-      const sortedTourns = playedTournaments
-        .map((t, i) => ({ t, i }))
-        .sort((a, b) => {
-          const d = (b.t.date||'').localeCompare(a.t.date||'');
-          if (d !== 0) return d;
-          const s = (b.t.session||'').localeCompare(a.t.session||'');
-          if (s !== 0) return s;
-          return a.i - b.i;
-        })
-        .map(({ t }) => t);
+      const sortedTourns = [...playedTournaments].sort((a, b) => {
+        const d = (b.date||'').localeCompare(a.date||'');
+        if (d !== 0) return d;
+        const s = (b.session||'').localeCompare(a.session||'');
+        if (s !== 0) return s;
+        const ai = a.id, bi = b.id;
+        if (typeof ai === 'number' && typeof bi === 'number') return ai - bi;
+        return String(ai) < String(bi) ? -1 : String(ai) > String(bi) ? 1 : 0;
+      });
       const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
       const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
