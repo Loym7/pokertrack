@@ -1207,11 +1207,10 @@
         setForm(emptyF); setShow(false);
       };
 
-      const sortedTourns = useMemo(() => [...playedTournaments].sort((a,b) =>
+      const sortedTourns = [...playedTournaments].sort((a,b) =>
         (b.date||'').localeCompare(a.date||'') ||
         (b.session||'').localeCompare(a.session||'') ||
-        (a.id||'').localeCompare(b.id||'')
-      ), [playedTournaments]);
+        (a.id||'').localeCompare(b.id||''));
       const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
       const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
