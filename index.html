@@ -1207,9 +1207,14 @@
         setForm(emptyF); setShow(false);
       };
 
-      const sortedTourns = [...playedTournaments].sort((a,b) =>
-        (b.date||'').localeCompare(a.date||'') ||
-        (b.session||'').localeCompare(a.session||''));
+      const sortedTourns = [...playedTournaments].sort((a,b) => {
+        const d = (b.date||'').localeCompare(a.date||'');
+        if (d !== 0) return d;
+        const s = (b.session||'').localeCompare(a.session||'');
+        if (s !== 0) return s;
+        const ai = String(a.id||0), bi = String(b.id||0);
+        return ai < bi ? -1 : ai > bi ? 1 : 0;
+      });
       const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
       const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
