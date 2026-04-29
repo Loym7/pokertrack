@@ -1496,7 +1496,8 @@
                                 <button onClick={() => {
                                   const g = Math.max(0, Number(editGains));
                                   const p = Math.round((g - t.buyIn * t.nbEntry) * 100) / 100;
-                                  setPlayed(prev => prev.map(x => x.id === t.id ? { ...x, gains: g, profit: p, itm: g > 0, session: editSess || x.session } : x));
+                                  const sessDate = sessions.find(s => s.code === editSess)?.date;
+                                  setPlayed(prev => prev.map(x => x.id === t.id ? { ...x, gains: g, profit: p, itm: g > 0, session: editSess || x.session, ...(sessDate ? { date: sessDate } : {}) } : x));
                                   setEditTournId(null);
                                 }} className="text-green-400 hover:text-green-300 text-xs font-bold">✓ OK</button>
                                 <button onClick={() => setEditTournId(null)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
