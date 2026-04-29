@@ -1207,8 +1207,9 @@
         setForm(emptyF); setShow(false);
       };
 
-      const totalPages = Math.ceil(playedTournaments.length / PER_PAGE);
-      const pageData   = playedTournaments.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+      const sortedTourns = [...playedTournaments].sort((a,b) => (b.date||'').localeCompare(a.date||'') || (b.session||'').localeCompare(a.session||''));
+      const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
+      const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
       return (
         <>
