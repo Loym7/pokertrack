@@ -1209,8 +1209,7 @@
 
       const sortedTourns = [...playedTournaments].sort((a,b) =>
         (b.date||'').localeCompare(a.date||'') ||
-        (b.session||'').localeCompare(a.session||'') ||
-        (a.id||'').localeCompare(b.id||''));
+        (b.session||'').localeCompare(a.session||''));
       const totalPages = Math.ceil(sortedTourns.length / PER_PAGE);
       const pageData   = sortedTourns.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
