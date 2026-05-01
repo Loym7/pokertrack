@@ -1009,14 +1009,14 @@
                 </p>
                 {rows.filter(r => !r.entry).length === 0
                   ? <p className="text-xs text-gray-600 italic">Tous les tournois sont en jeu</p>
-                  : <div className="space-y-3">
+                  : <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {Object.entries(
                       rows.filter(r => !r.entry).reduce((acc, r) => {
                         (acc[r.room] = acc[r.room] || []).push(r);
                         return acc;
                       }, {})
                     ).map(([room, tourns]) => (
-                      <div key={room}>
+                      <div key={room} className="bg-gray-800/40 rounded-lg p-3 border border-gray-700/50">
                         <div className="flex items-center gap-2 mb-2">
                           <span className={`text-xs font-bold px-2 py-0.5 rounded ${ROOM_CLS[room] || 'bg-gray-700 text-gray-300'}`}>{room}</span>
                           <div className="flex-1 h-px bg-gray-700" />
@@ -1045,6 +1045,7 @@
                                         <Badge cls={PRIO_CLS[r.priority]}>{r.priority}</Badge>
                                       </div>
                                       <div className="flex items-center gap-2 mt-0.5">
+                                        <span className="text-gray-400 text-xs">{r.startTime}</span>
                                         <span className="text-cyan-400 text-xs font-medium">{r.buyIn}€</span>
                                         <span className="text-gray-500 text-xs">{r.field}</span>
                                       </div>
