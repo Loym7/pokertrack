@@ -837,14 +837,14 @@
       const dragIdx = useRef(null);
 
       const loadGrid = () => {
-        const grid = savedGrids.find(g => g.id === Number(selectedGridId));
+        const grid = savedGrids.find(g => String(g.id) === String(selectedGridId));
         const source = grid ? grid.tournaments : [];
         setRows(source.map(t => ({
           _gid: uid(), libId: t.id, name: t.name, room: t.room,
           startTime: t.startTime, buyIn: t.buyIn, field: t.field,
           format: t.format, priority: t.priority, entardive: t.entardive,
           favorite: false, entry: false, reEntry: false, itm: false, gains: 0,
-        })));
+        })).sort((a, b) => (a.room||'').localeCompare(b.room||'')));
         setGen(true); setVal(false);
       };
 
@@ -967,7 +967,7 @@
               <span>📋</span>
               <span>
                 {selectedGridId
-                  ? <>Grille <span className="text-green-400 font-medium">{savedGrids.find(g=>g.id===Number(selectedGridId))?.name}</span> chargée</>
+                  ? <>Grille <span className="text-green-400 font-medium">{savedGrids.find(g=>String(g.id)===String(selectedGridId))?.name}</span> chargée</>
                   : 'Grille vide — ajoutez des tournois ponctuels'}
               </span>
             </div>
@@ -1009,27 +1009,42 @@
                 </p>
                 {rows.filter(r => !r.entry).length === 0
                   ? <p className="text-xs text-gray-600 italic">Tous les tournois sont en jeu</p>
-                  : <div className="flex flex-wrap gap-2">
-                    {rows.filter(r => !r.entry).map(r => (
-                      <button key={r._gid}
-                        onClick={() => upd(r._gid, 'entry', true)}
-                        className="group flex items-center gap-2 bg-gray-800 border border-gray-700 hover:border-green-500 hover:bg-green-900/20 rounded-lg px-3 py-2 text-left transition-all">
-                        <div className="flex flex-col min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {r.favorite && <span className="text-yellow-400 text-xs">★</span>}
-                            <span className="text-white text-xs font-semibold truncate max-w-32">{r.name}</span>
-                            <Badge cls={ROOM_CLS[r.room]}>{r.room}</Badge>
-                            <Badge cls={FMT_CLS[r.format]}>{r.format}</Badge>
-                            <Badge cls={PRIO_CLS[r.priority]}>{r.priority}</Badge>
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-gray-400 text-xs">{r.startTime}</span>
-                            <span className="text-cyan-400 text-xs font-medium">{r.buyIn}€</span>
-                            <span className="text-gray-500 text-xs">{r.field}</span>
-                          </div>
+                  : <div className="space-y-3">
+                    {Object.entries(
+                      rows.filter(r => !r.entry).reduce((acc, r) => {
+                        (acc[r.room] = acc[r.room] || []).push(r);
+                        return acc;
+                      }, {})
+                    ).map(([room, tourns]) => (
+                      <div key={room}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${ROOM_CLS[room] || 'bg-gray-700 text-gray-300'}`}>{room}</span>
+                          <div className="flex-1 h-px bg-gray-700" />
+                          <span className="text-xs text-gray-600">{tourns.length}</span>
                         </div>
-                        <span className="text-green-500 group-hover:text-green-300 text-lg font-bold ml-1 flex-shrink-0">+</span>
-                      </button>
+                        <div className="flex flex-wrap gap-2">
+                          {tourns.map(r => (
+                            <button key={r._gid}
+                              onClick={() => upd(r._gid, 'entry', true)}
+                              className="group flex items-center gap-2 bg-gray-800 border border-gray-700 hover:border-green-500 hover:bg-green-900/20 rounded-lg px-3 py-2 text-left transition-all">
+                              <div className="flex flex-col min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {r.favorite && <span className="text-yellow-400 text-xs">★</span>}
+                                  <span className="text-white text-xs font-semibold truncate max-w-32">{r.name}</span>
+                                  <Badge cls={FMT_CLS[r.format]}>{r.format}</Badge>
+                                  <Badge cls={PRIO_CLS[r.priority]}>{r.priority}</Badge>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-gray-400 text-xs">{r.startTime}</span>
+                                  <span className="text-cyan-400 text-xs font-medium">{r.buyIn}€</span>
+                                  <span className="text-gray-500 text-xs">{r.field}</span>
+                                </div>
+                              </div>
+                              <span className="text-green-500 group-hover:text-green-300 text-lg font-bold ml-1 flex-shrink-0">+</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 }
