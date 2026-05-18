@@ -2327,19 +2327,27 @@
     // ── usePersist : localStorage (cache offline) + Firestore (sync multi-appareils) ──
     function usePersist(key, initial) {
       const [state, setState] = useState(() => lsGet(key, initial));
-      const [loaded, setLoaded] = useState(false); // true dès que Firebase a répondu
-      const ready    = useRef(false);
-      const skipNext = useRef(false);
+      const [loaded, setLoaded] = useState(false);
+      const ready  = useRef(false);
+      const fromFB = useRef(false); // true = changement vient de Firebase, pas besoin de réécrire
 
-      // Écoute temps réel Firestore
       useEffect(() => {
         const unsub = db.collection('pt').doc(key).onSnapshot(
           snap => {
             if (snap.exists) {
-              skipNext.current = true;
-              const val = snap.data().v;
-              setState(val);
-              lsSet(key, val);
+              const remote = snap.data().v;
+              const local  = lsGet(key, initial);
+              // Merge : garde les items locaux absents de Firebase (ajoutés hors-ligne)
+              let merged = remote;
+              if (Array.isArray(remote) && Array.isArray(local)) {
+                const remoteIds = new Set(remote.map(x => String(x.id)));
+                const onlyLocal = local.filter(x => x.id != null && !remoteIds.has(String(x.id)));
+                if (onlyLocal.length) merged = [...remote, ...onlyLocal];
+              }
+              // Si merge = remote pur → pas besoin de réécrire dans Firebase
+              fromFB.current = (merged === remote);
+              setState(merged);
+              lsSet(key, merged);
             } else {
               db.collection('pt').doc(key).set({ v: lsGet(key, initial) }).catch(() => {});
             }
@@ -2351,9 +2359,8 @@
         return unsub;
       }, []);
 
-      // Écriture vers Firestore + localStorage à chaque changement local
       useEffect(() => {
-        if (skipNext.current) { skipNext.current = false; return; }
+        if (fromFB.current) { fromFB.current = false; return; }
         if (!ready.current) return;
         lsSet(key, state);
         db.collection('pt').doc(key).set({ v: state }).catch(() => {
