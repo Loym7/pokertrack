@@ -13,6 +13,7 @@
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script>
     firebase.initializeApp({
       apiKey:            "AIzaSyDRRV221R4BJqh70v4y0M0hN-BTWwHQa-M",
@@ -2372,22 +2373,27 @@
     }
 
     // ─── LOGIN ────────────────────────────────────────────────────
-    const PT_AUTH_KEY = 'pt_auth';
-    const PT_PWD_HASH = btoa('Brume'); // encodage simple
+    const auth = firebase.auth();
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
 
     function LoginScreen({ onUnlock }) {
-      const [pwd, setPwd]     = useState('');
-      const [error, setError] = useState(false);
-      const [show, setShow]   = useState(false);
+      const [email, setEmail]   = useState('');
+      const [pwd, setPwd]       = useState('');
+      const [error, setError]   = useState('');
+      const [show, setShow]     = useState(false);
+      const [loading, setLoading] = useState(false);
 
-      const tryLogin = () => {
-        if (btoa(pwd) === PT_PWD_HASH) {
-          localStorage.setItem(PT_AUTH_KEY, PT_PWD_HASH);
+      const tryLogin = async () => {
+        if (!email || !pwd) return;
+        setLoading(true); setError('');
+        try {
+          await auth.signInWithEmailAndPassword(email.trim(), pwd);
           onUnlock();
-        } else {
-          setError(true);
+        } catch(e) {
+          setError('Email ou mot de passe incorrect');
           setPwd('');
-          setTimeout(() => setError(false), 1500);
+        } finally {
+          setLoading(false);
         }
       };
 
@@ -2400,6 +2406,15 @@
               <p className="text-xs text-gray-500">Accès privé</p>
             </div>
             <div className="space-y-3">
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && tryLogin()}
+                placeholder="Email"
+                autoFocus
+                className="w-full bg-gray-700 border border-gray-600 focus:border-green-500 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none transition-colors"
+              />
               <div className="relative">
                 <input
                   type={show ? 'text' : 'password'}
@@ -2407,19 +2422,18 @@
                   onChange={e => setPwd(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && tryLogin()}
                   placeholder="Mot de passe"
-                  autoFocus
                   className={`w-full bg-gray-700 border rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none pr-10 transition-colors
-                    ${error ? 'border-red-500 animate-pulse' : 'border-gray-600 focus:border-green-500'}`}
+                    ${error ? 'border-red-500' : 'border-gray-600 focus:border-green-500'}`}
                 />
                 <button onClick={() => setShow(s => !s)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 text-xs">
                   {show ? '🙈' : '👁'}
                 </button>
               </div>
-              {error && <p className="text-red-400 text-xs text-center">Mot de passe incorrect</p>}
-              <button onClick={tryLogin}
-                className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg transition-colors">
-                Entrer
+              {error && <p className="text-red-400 text-xs text-center">{error}</p>}
+              <button onClick={tryLogin} disabled={loading}
+                className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg transition-colors">
+                {loading ? 'Connexion...' : 'Entrer'}
               </button>
             </div>
           </div>
@@ -2429,7 +2443,16 @@
 
     // ─── ROOT ─────────────────────────────────────────────────────
     function PokerTracker() {
-      const [unlocked, setUnlocked] = useState(() => localStorage.getItem(PT_AUTH_KEY) === PT_PWD_HASH);
+      const [unlocked, setUnlocked] = useState(false);
+      const [authChecked, setAuthChecked] = useState(false);
+
+      useEffect(() => {
+        const unsub = auth.onAuthStateChanged(user => {
+          setUnlocked(!!user);
+          setAuthChecked(true);
+        });
+        return unsub;
+      }, []);
       const [activeTab, setActiveTab]       = useState('library');
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
@@ -2478,6 +2501,7 @@
         });
       }, [sessLoaded, playedLoaded, sessions, played]);
 
+      if (!authChecked) return <div className="min-h-screen bg-gray-900 flex items-center justify-center"><span className="text-gray-500 text-sm">Chargement...</span></div>;
       if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
 
       const TABS = [
@@ -2520,7 +2544,7 @@
                 </div>
               )}
               {/* Lock */}
-              <button onClick={() => { localStorage.removeItem(PT_AUTH_KEY); setUnlocked(false); }}
+              <button onClick={() => auth.signOut()}
                 className="text-gray-600 hover:text-gray-400 transition-colors text-sm" title="Se déconnecter">🔒</button>
               {/* Reset — masqué sur mobile */}
               <button onClick={() => { if (confirm('Réinitialiser toutes les données ?')) { setSavedGrids(INIT_GRIDS); setSessions(INIT_SESSIONS); setPlayed(INIT_PLAYED); }}}
