@@ -2374,7 +2374,6 @@
 
     // ─── LOGIN ────────────────────────────────────────────────────
     const auth = firebase.auth();
-    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
 
     function LoginScreen({ onUnlock }) {
       const [email, setEmail]   = useState('');
@@ -2390,7 +2389,8 @@
           await auth.signInWithEmailAndPassword(email.trim(), pwd);
           onUnlock();
         } catch(e) {
-          setError('Email ou mot de passe incorrect');
+          console.error('Auth error:', e.code, e.message);
+          setError(e.code || 'Erreur inconnue');
           setPwd('');
         } finally {
           setLoading(false);
