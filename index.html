@@ -2374,24 +2374,28 @@
 
     // ─── LOGIN ────────────────────────────────────────────────────
     const auth = firebase.auth();
+    const PT_PWD_HASH = btoa('Brume');
 
     function LoginScreen({ onUnlock }) {
-      const [email, setEmail]   = useState('');
-      const [pwd, setPwd]       = useState('');
-      const [error, setError]   = useState('');
-      const [show, setShow]     = useState(false);
+      const [pwd, setPwd]         = useState('');
+      const [error, setError]     = useState('');
+      const [show, setShow]       = useState(false);
       const [loading, setLoading] = useState(false);
 
       const tryLogin = async () => {
-        if (!email || !pwd) return;
-        setLoading(true); setError('');
+        if (!pwd) return;
+        if (btoa(pwd) !== PT_PWD_HASH) {
+          setError('Mot de passe incorrect');
+          setPwd('');
+          setTimeout(() => setError(''), 1500);
+          return;
+        }
+        setLoading(true);
         try {
-          await auth.signInWithEmailAndPassword(email.trim(), pwd);
+          await auth.signInAnonymously();
           onUnlock();
         } catch(e) {
-          console.error('Auth error:', e.code, e.message);
-          setError(e.code || 'Erreur inconnue');
-          setPwd('');
+          setError('Erreur de connexion Firebase');
         } finally {
           setLoading(false);
         }
@@ -2406,15 +2410,6 @@
               <p className="text-xs text-gray-500">Accès privé</p>
             </div>
             <div className="space-y-3">
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && tryLogin()}
-                placeholder="Email"
-                autoFocus
-                className="w-full bg-gray-700 border border-gray-600 focus:border-green-500 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none transition-colors"
-              />
               <div className="relative">
                 <input
                   type={show ? 'text' : 'password'}
