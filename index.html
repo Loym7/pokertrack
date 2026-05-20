@@ -2373,31 +2373,22 @@
     }
 
     // ─── LOGIN ────────────────────────────────────────────────────
-    const auth = firebase.auth();
+    const PT_AUTH_KEY = 'pt_auth';
     const PT_PWD_HASH = btoa('Brume');
 
     function LoginScreen({ onUnlock }) {
-      const [pwd, setPwd]         = useState('');
-      const [error, setError]     = useState('');
-      const [show, setShow]       = useState(false);
-      const [loading, setLoading] = useState(false);
+      const [pwd, setPwd]     = useState('');
+      const [error, setError] = useState(false);
+      const [show, setShow]   = useState(false);
 
-      const tryLogin = async () => {
-        if (!pwd) return;
-        if (btoa(pwd) !== PT_PWD_HASH) {
-          setError('Mot de passe incorrect');
-          setPwd('');
-          setTimeout(() => setError(''), 1500);
-          return;
-        }
-        setLoading(true);
-        try {
-          await auth.signInAnonymously();
+      const tryLogin = () => {
+        if (btoa(pwd) === PT_PWD_HASH) {
+          localStorage.setItem(PT_AUTH_KEY, PT_PWD_HASH);
           onUnlock();
-        } catch(e) {
-          setError('Erreur de connexion Firebase');
-        } finally {
-          setLoading(false);
+        } else {
+          setError(true);
+          setPwd('');
+          setTimeout(() => setError(false), 1500);
         }
       };
 
@@ -2425,10 +2416,10 @@
                   {show ? '🙈' : '👁'}
                 </button>
               </div>
-              {error && <p className="text-red-400 text-xs text-center">{error}</p>}
-              <button onClick={tryLogin} disabled={loading}
-                className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg transition-colors">
-                {loading ? 'Connexion...' : 'Entrer'}
+              {error && <p className="text-red-400 text-xs text-center">Mot de passe incorrect</p>}
+              <button onClick={tryLogin}
+                className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg transition-colors">
+                Entrer
               </button>
             </div>
           </div>
@@ -2438,16 +2429,7 @@
 
     // ─── ROOT ─────────────────────────────────────────────────────
     function PokerTracker() {
-      const [unlocked, setUnlocked] = useState(false);
-      const [authChecked, setAuthChecked] = useState(false);
-
-      useEffect(() => {
-        const unsub = auth.onAuthStateChanged(user => {
-          setUnlocked(!!user);
-          setAuthChecked(true);
-        });
-        return unsub;
-      }, []);
+      const [unlocked, setUnlocked] = useState(() => localStorage.getItem(PT_AUTH_KEY) === PT_PWD_HASH);
       const [activeTab, setActiveTab]       = useState('library');
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
@@ -2496,7 +2478,6 @@
         });
       }, [sessLoaded, playedLoaded, sessions, played]);
 
-      if (!authChecked) return <div className="min-h-screen bg-gray-900 flex items-center justify-center"><span className="text-gray-500 text-sm">Chargement...</span></div>;
       if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
 
       const TABS = [
