@@ -765,7 +765,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            {grid.tournaments.map(t => (
+                            {[...grid.tournaments].sort((a,b) => (a.startTime||'').localeCompare(b.startTime||'')).map(t => (
                               <tr key={t.id} className="border-t border-gray-700 hover:bg-gray-700/40 transition-colors">
                                 <td className="px-3 py-2 font-medium text-white">{t.name}</td>
                                 <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
