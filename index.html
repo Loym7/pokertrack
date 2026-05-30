@@ -587,20 +587,53 @@
     );
 
     // ─── TAB 1 — GRILLES PRÉ-ENREGISTRÉES ────────────────────────
-    const EMPTY_TOURN = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO', priority:'Niv 1', entardive:'' };
-    const SESS_CLS = { Jour:'bg-sky-600 text-white', Soir:'bg-indigo-600 text-white' };
-
+    const EMPTY_TOURN = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO' };
     function GridsTab({ savedGrids, setSavedGrids }) {
       const [showCreate, setShowCreate]   = useState(false);
-      const [gridForm, setGridForm]       = useState({ name:'', sessionType:'Soir', room:'' });
+      const [gridForm, setGridForm]       = useState({ name:'', room:'' });
       const [editGridId, setEditGridId]   = useState(null);
       const [expandedId, setExpandedId]   = useState(null);
       const [addTournFor, setAddTournFor] = useState(null); // gridId
       const [tournForm, setTournForm]     = useState(EMPTY_TOURN);
       const [editTourn, setEditTourn]     = useState(null); // { gridId, tournId }
+      const [importFor, setImportFor]     = useState(null); // gridId
+      const [importSel, setImportSel]     = useState(new Set()); // Set of "srcGridId:tournId"
 
       const gset = k => v => setGridForm(f => ({ ...f, [k]: v }));
       const tset = k => v => setTournForm(f => ({ ...f, [k]: v }));
+
+      const toggleImport = key => setImportSel(prev => {
+        const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next;
+      });
+
+      const toggleImportAll = (srcGrid) => {
+        const keys = srcGrid.tournaments.map(t => `${srcGrid.id}:${t.id}`);
+        setImportSel(prev => {
+          const next = new Set(prev);
+          const allSel = keys.every(k => next.has(k));
+          keys.forEach(k => allSel ? next.delete(k) : next.add(k));
+          return next;
+        });
+      };
+
+      const doImport = gridId => {
+        const targetGrid = savedGrids.find(g => String(g.id) === String(gridId));
+        const forcedRoom = targetGrid?.room || null;
+        const toAdd = [];
+        importSel.forEach(key => {
+          const sep = key.indexOf(':');
+          const srcGridId = key.slice(0, sep);
+          const tournId   = key.slice(sep + 1);
+          const srcGrid = savedGrids.find(g => String(g.id) === srcGridId);
+          const t = srcGrid?.tournaments.find(t => String(t.id) === tournId);
+          if (t) toAdd.push({ ...t, id: uid(), room: forcedRoom || t.room });
+        });
+        if (toAdd.length) {
+          setSavedGrids(gs => gs.map(g => String(g.id) === String(gridId)
+            ? { ...g, tournaments: [...g.tournaments, ...toAdd] } : g));
+        }
+        setImportFor(null); setImportSel(new Set());
+      };
 
       // ── Grid CRUD ──
       const saveGrid = () => {
@@ -611,12 +644,12 @@
           setSavedGrids(gs => [...gs, { id: uid(), ...gridForm, tournaments: [] }]);
           setExpandedId(null);
         }
-        setGridForm({ name:'', sessionType:'Soir', room:'' }); setEditGridId(null); setShowCreate(false);
+        setGridForm({ name:'', room:'' }); setEditGridId(null); setShowCreate(false);
       };
 
       const startEditGrid = (e, g) => {
         e.stopPropagation();
-        setGridForm({ name: g.name, sessionType: g.sessionType, room: g.room||'' });
+        setGridForm({ name: g.name, room: g.room||'' });
         setEditGridId(g.id); setShowCreate(true);
       };
 
@@ -629,7 +662,7 @@
       // ── Tournament CRUD inside a grid ──
       const saveTournament = gridId => {
         if (!tournForm.name.trim()) return;
-        const tourn = { ...tournForm, buyIn: Number(tournForm.buyIn), entardive: Number(tournForm.entardive) || 0 };
+        const tourn = { ...tournForm, buyIn: Number(tournForm.buyIn) };
         if (editTourn && editTourn.gridId === gridId) {
           setSavedGrids(gs => gs.map(g => g.id === gridId
             ? { ...g, tournaments: g.tournaments.map(t => t.id === editTourn.tournId ? { ...tourn, id: editTourn.tournId } : t) }
@@ -644,7 +677,7 @@
       };
 
       const startEditTourn = (gridId, t) => {
-        setTournForm({ name:t.name, room:t.room, startTime:t.startTime, buyIn:t.buyIn, field:t.field, format:t.format, priority:t.priority, entardive:t.entardive });
+        setTournForm({ name:t.name, room:t.room, startTime:t.startTime, buyIn:t.buyIn, field:t.field, format:t.format });
         setEditTourn({ gridId, tournId: t.id });
         setAddTournFor(gridId);
       };
@@ -663,7 +696,7 @@
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-green-400">Grilles pré-enregistrées — {savedGrids.length}</h2>
             {!showCreate && (
-              <Btn onClick={() => { setGridForm({ name:'', sessionType:'Soir' }); setEditGridId(null); setShowCreate(true); }}
+              <Btn onClick={() => { setGridForm({ name:'', room:'' }); setEditGridId(null); setShowCreate(true); }}
                 cls="bg-green-600 hover:bg-green-700 text-white">+ Créer une grille</Btn>
             )}
           </div>
@@ -680,10 +713,6 @@
                 <div>
                   <label className="text-xs text-gray-400 block mb-1">Room (optionnel)</label>
                   <Sel value={gridForm.room||''} onChange={gset('room')} options={[{value:'',label:'Toutes rooms'}, ...ROOMS.map(r=>({value:r,label:r}))]} cls="w-full" />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-400 block mb-1">Type de session</label>
-                  <Sel value={gridForm.sessionType} onChange={gset('sessionType')} options={SESSION_TYPES} cls="w-full" />
                 </div>
               </div>
               <div className="flex gap-2 mt-3">
@@ -712,7 +741,6 @@
                   <div className="flex items-center gap-3">
                     <span className="text-white font-semibold">{grid.name}</span>
                     {grid.room && <Badge cls={ROOM_CLS[grid.room]||'bg-gray-600 text-white'}>{grid.room}</Badge>}
-                    <Badge cls={SESS_CLS[grid.sessionType] || 'bg-gray-600 text-white'}>{grid.sessionType}</Badge>
                     <span className="text-gray-500 text-xs">{grid.tournaments.length} tournoi{grid.tournaments.length !== 1 ? 's' : ''}</span>
                   </div>
                   <div className="flex items-center gap-3">
@@ -731,7 +759,7 @@
                         <table className="w-full text-sm text-left">
                           <thead className="bg-gray-900 text-gray-400 text-xs uppercase">
                             <tr>
-                              {['Nom','Room','Heure','Buy-In','Field','Format','Priorité','EnTardive',''].map(h => (
+                              {['Nom','Room','Heure','Buy-In','Field','Format',''].map(h => (
                                 <th key={h} className="px-3 py-2 whitespace-nowrap">{h}</th>
                               ))}
                             </tr>
@@ -745,8 +773,6 @@
                                 <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
                                 <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
                                 <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
-                                <td className="px-3 py-2"><Badge cls={PRIO_CLS[t.priority]}>{t.priority}</Badge></td>
-                                <td className="px-3 py-2 text-gray-400 text-xs">{t.entardive || '—'}</td>
                                 <td className="px-3 py-2">
                                   <div className="flex gap-2">
                                     <button onClick={() => startEditTourn(grid.id, t)} className="text-blue-400 hover:text-blue-200 text-sm">✏️</button>
@@ -768,14 +794,19 @@
                     {isAddingHere && (
                       <div className="bg-gray-900/60 border-t border-gray-700 px-4 py-3">
                         <p className="text-xs font-semibold text-green-400 mb-2">{editTourn ? '✏️ Modifier le tournoi' : '➕ Ajouter un tournoi'}</p>
-                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
                           <div className="col-span-2">
                             <label className="text-xs text-gray-500 block mb-0.5">Nom *</label>
                             <Inp value={tournForm.name} onChange={tset('name')} placeholder="Nom du tournoi" cls="w-full" />
                           </div>
                           <div>
                             <label className="text-xs text-gray-500 block mb-0.5">Room</label>
-                            <Sel value={tournForm.room} onChange={tset('room')} options={ROOMS} cls="w-full" />
+                            {grid.room
+                              ? <div className="flex items-center h-8 px-2">
+                                  <Badge cls={ROOM_CLS[grid.room]||'bg-gray-600 text-white'}>{grid.room}</Badge>
+                                </div>
+                              : <Sel value={tournForm.room} onChange={tset('room')} options={ROOMS} cls="w-full" />
+                            }
                           </div>
                           <div>
                             <label className="text-xs text-gray-500 block mb-0.5">Heure</label>
@@ -793,14 +824,6 @@
                             <label className="text-xs text-gray-500 block mb-0.5">Format</label>
                             <Sel value={tournForm.format} onChange={tset('format')} options={FORMATS} cls="w-full" />
                           </div>
-                          <div>
-                            <label className="text-xs text-gray-500 block mb-0.5">Priorité</label>
-                            <Sel value={tournForm.priority} onChange={tset('priority')} options={PRIORITIES} cls="w-full" />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500 block mb-0.5">EnTardive</label>
-                            <Inp type="number" value={tournForm.entardive} onChange={tset('entardive')} placeholder="22.5" cls="w-full" />
-                          </div>
                         </div>
                         <div className="flex gap-2 mt-2">
                           <Btn onClick={() => saveTournament(grid.id)} cls="bg-green-600 hover:bg-green-700 text-white text-xs">
@@ -811,11 +834,66 @@
                       </div>
                     )}
 
+                    {/* Import panel */}
+                    {importFor === grid.id && (
+                      <div className="bg-gray-900/80 border-t border-gray-700 px-4 py-3">
+                        <div className="flex items-center justify-between mb-3">
+                          <p className="text-xs font-semibold text-blue-400">📥 Importer depuis une autre grille</p>
+                          {importSel.size > 0 && <span className="text-xs text-blue-300">{importSel.size} sélectionné{importSel.size > 1 ? 's' : ''}</span>}
+                        </div>
+                        {savedGrids.filter(g => String(g.id) !== String(grid.id) && g.tournaments.length > 0).length === 0
+                          ? <p className="text-xs text-gray-600 italic">Aucun tournoi disponible dans les autres grilles.</p>
+                          : <div className="space-y-4 max-h-72 overflow-y-auto pr-1">
+                              {savedGrids.filter(g => String(g.id) !== String(grid.id) && g.tournaments.length > 0).map(srcGrid => {
+                                const allSel = srcGrid.tournaments.every(t => importSel.has(`${srcGrid.id}:${t.id}`));
+                                return (
+                                  <div key={srcGrid.id}>
+                                    <div className="flex items-center gap-2 mb-1.5">
+                                      <span className="text-xs font-semibold text-gray-300">{srcGrid.name}</span>
+                                      {srcGrid.room && <Badge cls={ROOM_CLS[srcGrid.room]||'bg-gray-600 text-white'}>{srcGrid.room}</Badge>}
+                                      <button onClick={() => toggleImportAll(srcGrid)}
+                                        className="text-xs text-gray-500 hover:text-blue-400 underline ml-1 transition-colors">
+                                        {allSel ? 'Tout désélectionner' : 'Tout sélectionner'}
+                                      </button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5 pl-2">
+                                      {srcGrid.tournaments.map(t => {
+                                        const key = `${srcGrid.id}:${t.id}`;
+                                        const sel = importSel.has(key);
+                                        return (
+                                          <button key={t.id} onClick={() => toggleImport(key)}
+                                            className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs border transition-all ${sel ? 'bg-blue-700 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-blue-500'}`}>
+                                            <span className="font-medium">{t.name}</span>
+                                            <span className="opacity-60">{t.startTime}</span>
+                                            <span className={`font-mono ${sel ? 'text-blue-200' : 'text-cyan-400'}`}>{t.buyIn}€</span>
+                                            <Badge cls={FMT_CLS[t.format]||'bg-gray-600 text-white'}>{t.format}</Badge>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                        }
+                        <div className="flex gap-2 mt-3">
+                          <Btn onClick={() => doImport(grid.id)} cls={`text-white text-xs ${importSel.size ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-600 cursor-not-allowed opacity-50'}`}>
+                            {importSel.size ? `Importer ${importSel.size} tournoi${importSel.size > 1 ? 's' : ''}` : 'Importer'}
+                          </Btn>
+                          <Btn onClick={() => { setImportFor(null); setImportSel(new Set()); }} cls="bg-gray-600 hover:bg-gray-700 text-white text-xs">Annuler</Btn>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Footer actions */}
-                    {!isAddingHere && (
-                      <div className="px-4 py-2 border-t border-gray-700/50">
-                        <Btn onClick={() => { setTournForm(EMPTY_TOURN); setEditTourn(null); setAddTournFor(grid.id); }}
+                    {!isAddingHere && importFor !== grid.id && (
+                      <div className="px-4 py-2 border-t border-gray-700/50 flex gap-2">
+                        <Btn onClick={() => { setTournForm({ ...EMPTY_TOURN, room: grid.room || 'Winamax' }); setEditTourn(null); setAddTournFor(grid.id); }}
                           cls="bg-gray-700 hover:bg-gray-600 text-green-400 text-xs">+ Ajouter un tournoi</Btn>
+                        {savedGrids.some(g => String(g.id) !== String(grid.id) && g.tournaments.length > 0) && (
+                          <Btn onClick={() => { setImportFor(grid.id); setImportSel(new Set()); }}
+                            cls="bg-gray-700 hover:bg-gray-600 text-blue-400 text-xs">📥 Importer depuis une grille</Btn>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1242,7 +1320,7 @@
       const [editSess,  setEditSess]      = useState('');
       const PER_PAGE = 15;
 
-      const startEdit = s => { setEditId(s.id); setEditForm({ start: s.start, end: s.end }); };
+      const startEdit = s => { setEditId(s.id); setEditForm({ start: s.start, end: s.end, typeSession: s.typeSession || 'Soir' }); };
       const cancelEdit = () => { setEditId(null); setEditForm({}); };
       const saveEdit = () => {
         setSessions(prev => prev.map(s => s.id === editId ? {
@@ -1250,12 +1328,12 @@
           start: editForm.start,
           end: editForm.end,
           duration: calcDuration(editForm.start, editForm.end),
-          typeSession: typeSession(editForm.start),
+          typeSession: editForm.typeSession || s.typeSession,
         } : s));
         setEditId(null); setEditForm({});
       };
 
-      const emptyF = { type:'Grind', date:todayStr, start:'18:00', end:'23:00', hands:0 };
+      const emptyF = { type:'Grind', date:todayStr, start:'18:00', end:'23:00', hands:0, typeSession:'Soir' };
       const [form, setForm] = useState(emptyF);
       const set = k => v => setForm(f => ({ ...f, [k]: v }));
 
@@ -1268,7 +1346,7 @@
         setSessions(prev => [...prev, {
           id: uid(), code: `${prefix}${newNum}`, ...form,
           hands: Number(form.hands),
-          typeSession: typeSession(form.start),
+          typeSession: form.typeSession || 'Soir',
           duration: calcDuration(form.start, form.end),
         }]);
         setForm(emptyF); setShow(false);
@@ -1351,9 +1429,13 @@
                       <label className="text-xs text-gray-400 block mb-1">Fin</label>
                       <Inp type="time" value={form.end} onChange={set('end')} cls="w-full" />
                     </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Moment</label>
+                      <Sel value={form.typeSession||'Soir'} onChange={set('typeSession')} options={['Jour','Soir','Live']} cls="w-full" />
+                    </div>
                   </div>
                   <div className="mt-2 text-xs text-gray-500">
-                    Durée calculée : {calcDuration(form.start, form.end)} | Moment : {typeSession(form.start)}
+                    Durée calculée : {calcDuration(form.start, form.end)}
                   </div>
                   <div className="flex gap-2 mt-3">
                     <Btn onClick={save} cls="bg-green-600 hover:bg-green-700 text-white">Sauvegarder</Btn>
@@ -1380,7 +1462,14 @@
                       <tr key={s.id} className={`border-t border-gray-700 ${editId===s.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}>
                         <td className="px-3 py-2 font-mono text-green-400 font-semibold">{s.code}</td>
                         <td className="px-3 py-2 text-gray-300">{s.date}</td>
-                        <td className="px-3 py-2 text-gray-400">{editId===s.id ? typeSession(editForm.start) : s.typeSession}</td>
+                        <td className="px-3 py-2 text-gray-400">
+                          {editId===s.id
+                            ? <select value={editForm.typeSession||'Soir'} onChange={e => setEditForm(f=>({...f,typeSession:e.target.value}))}
+                                className="bg-gray-700 border border-green-500 rounded px-1 py-0.5 text-white text-xs focus:outline-none">
+                                {['Jour','Soir','Live'].map(o=><option key={o} value={o}>{o}</option>)}
+                              </select>
+                            : s.typeSession}
+                        </td>
                         <td className="px-3 py-2">
                           {editId===s.id
                             ? <input type="time" value={editForm.start} onChange={e => setEditForm(f=>({...f,start:e.target.value}))}
@@ -1433,7 +1522,7 @@
                   <span className="text-blue-400 font-semibold">{sessions.filter(s=>s.type==='Travail').length}</span> sessions Travail
                 </span>
                 {!showForm && (
-                  <Btn onClick={() => { setForm({...emptyF, type:'Travail', date:toStr(new Date())}); setShow(true); }} cls="bg-blue-600 hover:bg-blue-700 text-white">+ Nouvelle session</Btn>
+                  <Btn onClick={() => { setForm({...emptyF, type:'Travail', date:toStr(new Date()), typeSession:'Jour'}); setShow(true); }} cls="bg-blue-600 hover:bg-blue-700 text-white">+ Nouvelle session</Btn>
                 )}
               </div>
 
@@ -1451,6 +1540,10 @@
                     <div>
                       <label className="text-xs text-gray-400 block mb-1">Fin</label>
                       <Inp type="time" value={form.end} onChange={set('end')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Moment</label>
+                      <Sel value={form.typeSession||'Jour'} onChange={set('typeSession')} options={['Jour','Soir']} cls="w-full" />
                     </div>
                   </div>
                   <div className="mt-2 text-xs text-gray-500">
