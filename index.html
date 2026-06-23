@@ -2562,30 +2562,18 @@
       const [loaded, setLoaded] = useState(false);
       const ready  = useRef(false);
       const fromFB = useRef(false); // true = changement vient de Firebase, pas besoin de réécrire
-      const initialSync = useRef(true); // true seulement pour le 1er snapshot reçu après ouverture
 
       useEffect(() => {
         const unsub = db.collection('pt').doc(key).onSnapshot(
           snap => {
             if (snap.exists) {
+              // Firebase est la seule source de vérité : pas de fusion avec un cache local
+              // périmé (sinon un appareil rouvert avec d'anciennes données ressuscite des
+              // éléments supprimés ailleurs).
               const remote = snap.data().v;
-              let merged = remote;
-              // Merge (une seule fois, au chargement) : récupère les items ajoutés hors-ligne.
-              // Au-delà du 1er snapshot, on fait confiance à Firebase pour éviter de
-              // ressusciter des items supprimés à cause d'un cache local périmé (autre onglet/appareil).
-              if (initialSync.current) {
-                const local = lsGet(key, initial);
-                if (Array.isArray(remote) && Array.isArray(local)) {
-                  const remoteIds = new Set(remote.map(x => String(x.id)));
-                  const onlyLocal = local.filter(x => x.id != null && !remoteIds.has(String(x.id)));
-                  if (onlyLocal.length) merged = [...remote, ...onlyLocal];
-                }
-              }
-              initialSync.current = false;
-              // Si merge = remote pur → pas besoin de réécrire dans Firebase
-              fromFB.current = (merged === remote);
-              setState(merged);
-              lsSet(key, merged);
+              fromFB.current = true;
+              setState(remote);
+              lsSet(key, remote);
             } else {
               db.collection('pt').doc(key).set({ v: lsGet(key, initial) }).catch(() => {});
             }
