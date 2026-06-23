@@ -1890,19 +1890,34 @@
       bestStreakGain = Math.round(bestStreakGain * 100) / 100;
       bestStreakDown = Math.round(bestStreakDown * 100) / 100;
 
-      const RecordCard = ({ emoji, label, value, sub, color = 'text-white', badge, badgeColor }) => (
-        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">{emoji}</span>
-            <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">{label}</p>
+      const RecordCard = ({ emoji, label, value, sub, color = 'text-white', badge, badgeColor, glow }) => (
+        <div className={`relative bg-gradient-to-br from-gray-800 to-gray-800/70 border rounded-xl p-4 space-y-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl
+          ${glow ? 'border-yellow-600/50 shadow-[0_0_24px_-8px_rgba(234,179,8,0.5)] hover:shadow-[0_0_28px_-6px_rgba(234,179,8,0.6)]' : 'border-gray-700 hover:border-gray-600'}`}>
+          <div className="flex items-center gap-2.5">
+            <span className={`flex items-center justify-center w-9 h-9 rounded-full text-lg flex-shrink-0 ring-1
+              ${glow ? 'bg-yellow-500/10 ring-yellow-500/40' : 'bg-gray-900/60 ring-gray-700'}`}>{emoji}</span>
+            <p className="text-[11px] text-gray-500 font-semibold uppercase tracking-wide leading-tight">{label}</p>
           </div>
           <p className={`text-2xl font-bold ${color}`}>{value}</p>
-          {sub && <p className="text-xs text-gray-500">{sub}</p>}
+          {sub && <p className="text-xs text-gray-500 truncate">{sub}</p>}
           {badge && <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${badgeColor || 'bg-gray-700 text-gray-300'}`}>{badge}</span>}
         </div>
       );
 
-      const empty = <p className="text-gray-600 text-sm col-span-full text-center py-8">Pas encore assez de données</p>;
+      const SectionTitle = ({ icon, children }) => (
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-base">{icon}</span>
+          <p className="text-sm font-semibold uppercase tracking-wide text-gray-400">{children}</p>
+          <div className="flex-1 h-px bg-gradient-to-r from-gray-700 to-transparent" />
+        </div>
+      );
+
+      const empty = (
+        <div className="col-span-full flex flex-col items-center justify-center py-10 text-gray-600 border border-dashed border-gray-700 rounded-xl">
+          <span className="text-3xl mb-2 opacity-40">🔒</span>
+          <p className="text-sm">Pas encore assez de données pour débloquer ces records</p>
+        </div>
+      );
 
       return (
         <div className="p-4 space-y-6">
@@ -1934,12 +1949,30 @@
             </>)}
           </div>
 
+          {/* Bannière héro */}
+          {bestSess && (
+            <div className="relative overflow-hidden rounded-2xl border border-yellow-600/40 bg-gradient-to-br from-yellow-900/30 via-gray-800 to-gray-800 p-5 flex flex-wrap items-center gap-4">
+              <div className="text-5xl flex-shrink-0 drop-shadow-[0_0_12px_rgba(234,179,8,0.5)]">🏆</div>
+              <div className="flex-1 min-w-48">
+                <p className="text-xs text-yellow-400/80 uppercase tracking-wider font-semibold mb-1">Meilleur résultat</p>
+                <p className="text-3xl font-bold text-green-400">+{bestSess.profit.toFixed(2)}€</p>
+                <p className="text-xs text-gray-400 mt-1">{bestSess.code} · {bestSess.date} · {bestSess.tourns} tournois</p>
+              </div>
+              {curStreak > 0 && (
+                <div className="text-center px-5 border-l border-gray-700/70">
+                  <p className="text-2xl font-bold text-orange-400 animate-pulse">🔥 {curStreak}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">en série</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Sessions */}
           <div>
-            <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Sessions</p>
+            <SectionTitle icon="🎮">Sessions</SectionTitle>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {sessionsWithProfit.length === 0 ? empty : <>
-                <RecordCard emoji="🚀" label="Meilleure session"
+                <RecordCard emoji="🚀" label="Meilleure session" glow
                   value={`${bestSess.profit >= 0 ? '+' : ''}${bestSess.profit.toFixed(2)}€`} color="text-green-400"
                   sub={`${bestSess.code} — ${bestSess.date}`} badge={bestSess.typeSession} />
                 <RecordCard emoji="💸" label="Pire session"
@@ -1957,10 +1990,10 @@
 
           {/* Tournois */}
           <div>
-            <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Tournois</p>
+            <SectionTitle icon="🃏">Tournois</SectionTitle>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {filtTourns.length === 0 ? empty : <>
-                <RecordCard emoji="💰" label="Tournoi le plus profitable"
+                <RecordCard emoji="💰" label="Tournoi le plus profitable" glow
                   value={`+${bestTourn.profit.toFixed(2)}€`} color="text-green-400"
                   sub={`${bestTourn.session} — ${bestTourn.date} — ${bestTourn.room}`}
                   badge={`${bestTourn.buyIn}€ ${bestTourn.format}`} badgeColor="bg-green-900 text-green-300" />
@@ -1978,10 +2011,10 @@
 
           {/* Séries */}
           <div>
-            <p className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Séries</p>
+            <SectionTitle icon="⚡">Séries</SectionTitle>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {sessionsWithProfit.length === 0 ? empty : <>
-                <RecordCard emoji="🔥" label="Série gagnante en cours"
+                <RecordCard emoji="🔥" label="Série gagnante en cours" glow={curStreak > 0}
                   value={`${curStreak} session${curStreak > 1 ? 's' : ''}`}
                   color={curStreak > 0 ? 'text-green-400' : 'text-gray-500'} />
                 <RecordCard emoji="🏅" label="Meilleure série gagnante"
