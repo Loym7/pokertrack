@@ -927,7 +927,7 @@
     // ─── TAB 2 — GRILLE DU JOUR ───────────────────────────────────
     const EMPTY_PONCT = { name:'', room:'Winamax', startTime:'20:00', buyIn:5, field:'500-999', format:'PKO' };
 
-    function DailyGridTab({ savedGrids, setPlayedTournaments, sessions, setSessions, playedTournaments }) {
+    function DailyGridTab({ savedGrids, setSavedGrids, setPlayedTournaments, sessions, setSessions, playedTournaments }) {
       const [date, setDate]             = useState(todayStr);
       const [typeSession, setTypeSession] = useState('Soir');
       const [selectedGridIds, setSelIds]  = useState(new Set());
@@ -937,6 +937,7 @@
       const [generated, setGen]         = useState(false);
       const [showPonct, setShowP]       = useState(false);
       const [ponct, setPonct]           = useState(EMPTY_PONCT);
+      const [addToGridId, setAddToGridId] = useState('');
       const [validated, setVal]         = useState(false);
       const [summary, setSummary]       = useState(null);
       const dragIdx = useRef(null);
@@ -979,7 +980,17 @@
           buyIn: Number(ponct.buyIn),
           favorite: false, entry: false, reEntry: false, itm: false, done: false, gains: 0,
         }]);
-        setPonct(EMPTY_PONCT); setShowP(false);
+        if (addToGridId) {
+          setSavedGrids(gs => gs.map(g => String(g.id) !== addToGridId ? g : {
+            ...g,
+            tournaments: [...g.tournaments, {
+              id: uid(), name: ponct.name, room: g.room || ponct.room,
+              startTime: ponct.startTime, buyIn: Number(ponct.buyIn),
+              field: ponct.field, format: ponct.format,
+            }],
+          }));
+        }
+        setPonct(EMPTY_PONCT); setAddToGridId(''); setShowP(false);
       };
 
       const validate = () => {
@@ -1112,7 +1123,7 @@
           {showPonct && (
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
               <p className="text-xs font-semibold text-gray-400 mb-2">Tournoi ponctuel</p>
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
                 <div className="col-span-2">
                   <Inp value={ponct.name} onChange={pSet('name')} placeholder="Nom du tournoi" cls="w-full" />
                 </div>
@@ -1121,8 +1132,15 @@
                 <Sel value={ponct.buyIn} onChange={pSet('buyIn')} options={BUY_INS.map(b => ({ value:b, label:`${b}€` }))} cls="w-full" />
                 <Sel value={ponct.field} onChange={pSet('field')} options={FIELDS} cls="w-full" />
                 <Sel value={ponct.format} onChange={pSet('format')} options={FORMATS} cls="w-full" />
-                <Sel value={ponct.priority} onChange={pSet('priority')} options={PRIORITIES} cls="w-full" />
               </div>
+              {savedGrids.length > 0 && (
+                <div className="mt-2 max-w-xs">
+                  <label className="text-xs text-gray-500 block mb-0.5">Ajouter aussi à une grille</label>
+                  <Sel value={addToGridId} onChange={setAddToGridId}
+                    options={[{ value:'', label:'Aucune' }, ...savedGrids.map(g => ({ value:String(g.id), label: g.name + (g.room ? ` · ${g.room}` : '') }))]}
+                    cls="w-full" />
+                </div>
+              )}
               <div className="flex gap-2 mt-2">
                 <Btn onClick={addPonct} cls="bg-green-600 hover:bg-green-700 text-white text-xs">Ajouter</Btn>
                 <Btn onClick={() => setShowP(false)} cls="bg-gray-600 hover:bg-gray-700 text-white text-xs">Annuler</Btn>
@@ -2101,16 +2119,18 @@
         const ratioG   = total > 0 ? Math.round(hGrind/total*100) : 0;
         const ratioT   = total > 0 ? Math.round(hTravail/total*100) : 0;
 
+        const sumEntries = arr => arr.reduce((a,t) => a + (t.nbEntry||1), 0);
+
         const MOMENT_COLORS = { Jour:'#38bdf8', Soir:'#818cf8', Live:'#34d399' };
         const byMomentCount = ['Jour','Soir','Live'].map(m => ({
-          name: m, value: filtered.filter(t => filtSess.find(s=>s.code===t.session && s.typeSession===m)).length,
+          name: m, value: sumEntries(filtered.filter(t => filtSess.find(s=>s.code===t.session && s.typeSession===m))),
           fill: MOMENT_COLORS[m],
         })).filter(x => x.value > 0);
 
-        const byFormatCount = FORMATS.map(f => ({ name:f, value: filtered.filter(t=>t.format===f).length, fill: FMT_CHART[f]||'#6b7280' })).filter(x=>x.value>0);
-        const byFieldCount  = ['0-149','150-499','500-999','1000-2000','2000+'].map(f => ({ name:f, value: filtered.filter(t=>t.field===f).length })).filter(x=>x.value>0);
-        const byBuyinCount  = BUY_INS.map(b => ({ name:`${b}€`, value: filtered.filter(t=>t.buyIn===b).length, _b:b })).filter(x=>x.value>0);
-        const byRoomCount   = ROOMS.map(r => ({ name:r, value: filtered.filter(t=>t.room===r).length, fill: ROOM_CHART[r]||'#6b7280' })).filter(x=>x.value>0);
+        const byFormatCount = FORMATS.map(f => ({ name:f, value: sumEntries(filtered.filter(t=>t.format===f)), fill: FMT_CHART[f]||'#6b7280' })).filter(x=>x.value>0);
+        const byFieldCount  = ['0-149','150-499','500-999','1000-2000','2000+'].map(f => ({ name:f, value: sumEntries(filtered.filter(t=>t.field===f)) })).filter(x=>x.value>0);
+        const byBuyinCount  = BUY_INS.map(b => ({ name:`${b}€`, value: sumEntries(filtered.filter(t=>t.buyIn===b)), _b:b })).filter(x=>x.value>0);
+        const byRoomCount   = ROOMS.map(r => ({ name:r, value: sumEntries(filtered.filter(t=>t.room===r)), fill: ROOM_CHART[r]||'#6b7280' })).filter(x=>x.value>0);
 
         return { hGrind: Math.round(hGrind), hTravail: Math.round(hTravail),
                  total: Math.round(total), ratioG, ratioT,
@@ -2322,35 +2342,35 @@
             <KpiCard label="ITM Rate" value={`${kpi.itmR}%`} color="text-yellow-400" />
           </div>
 
-          {/* Charts row 1 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Profit Cumulé</p>
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={cumulData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="date" tick={{ fill:'#9ca3af', fontSize:10 }} />
-                  <YAxis tick={{ fill:'#9ca3af', fontSize:10 }} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} />
-                  <Line type="monotone" dataKey="profit" stroke="#22c55e" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
           {/* ══════════ ONGLET TOURNOIS ══════════ */}
           {dashTab === 'tournois' && (<>
 
-          {/* Charts row 2 */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <SectionLabel>📈 Évolution</SectionLabel>
+
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+            <p className="text-sm font-semibold text-gray-300 mb-3">Profit Cumulé</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={cumulData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                <XAxis dataKey="date" tick={{ fill:'#9ca3af', fontSize:10 }} />
+                <YAxis tick={{ fill:'#9ca3af', fontSize:10 }} />
+                <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} />
+                <Line type="monotone" dataKey="profit" stroke="#22c55e" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <SectionLabel>💰 Profit par catégorie</SectionLabel>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Room</p>
+              <p className="text-sm font-semibold text-gray-300 mb-3">Par Room</p>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={byRoom}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="room" tick={{ fill:'#9ca3af', fontSize:11 }} />
                   <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
                   <Bar dataKey="profit" radius={[4,4,0,0]}>
                     {byRoom.map(e => <Cell key={e.room} fill={ROOM_CHART[e.room]||'#6b7280'} />)}
                   </Bar>
@@ -2358,13 +2378,13 @@
               </ResponsiveContainer>
             </div>
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Format</p>
+              <p className="text-sm font-semibold text-gray-300 mb-3">Par Format</p>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={byFormat}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="format" tick={{ fill:'#9ca3af', fontSize:11 }} />
                   <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
                   <Bar dataKey="profit" radius={[4,4,0,0]}>
                     {byFormat.map(e => <Cell key={e.format} fill={FMT_CHART[e.format]||'#6b7280'} />)}
                   </Bar>
@@ -2372,13 +2392,13 @@
               </ResponsiveContainer>
             </div>
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Field</p>
+              <p className="text-sm font-semibold text-gray-300 mb-3">Par Field</p>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={byField} layout="vertical" barSize={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
                   <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} />
                   <YAxis type="category" dataKey="field" tick={{ fill:'#9ca3af', fontSize:10 }} width={64} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
                   <Bar dataKey="profit" radius={[0,4,4,0]}>
                     {byField.map(e => <Cell key={e.field} fill={e.profit>=0?'#06b6d4':'#f97316'} />)}
                   </Bar>
@@ -2386,13 +2406,13 @@
               </ResponsiveContainer>
             </div>
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Buy-In</p>
+              <p className="text-sm font-semibold text-gray-300 mb-3">Par Buy-In</p>
               <ResponsiveContainer width="100%" height={Math.max(180, byBuyin.length * 32)}>
                 <BarChart data={byBuyin} layout="vertical" barSize={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
                   <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} />
                   <YAxis type="category" dataKey="buyin" tick={{ fill:'#9ca3af', fontSize:11 }} width={36} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
                   <Bar dataKey="profit" radius={[0,4,4,0]}>
                     {byBuyin.map(e => <Cell key={e.buyin} fill={e.profit>=0?'#22c55e':'#ef4444'} />)}
                   </Bar>
@@ -2400,6 +2420,8 @@
               </ResponsiveContainer>
             </div>
           </div>
+
+          <SectionLabel>📋 Détail</SectionLabel>
 
           {/* Table détail tournois */}
           <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
@@ -2767,7 +2789,7 @@
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
             <div className={activeTab==='library'   ? '' : 'hidden'}><GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} /></div>
-            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} /></div>
+            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} /></div>
             <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
