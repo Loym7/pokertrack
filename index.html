@@ -47,7 +47,7 @@
 
     // ─── CONSTANTS ────────────────────────────────────────────────
     const ROOMS    = ['Winamax', 'Betclic', 'PMU', 'Live'];
-    const BUY_INS  = [1, 2, 3, 5, 10, 20, 50, 100, 150];
+    const BUY_INS  = [0, 1, 2, 3, 5, 10, 20, 50, 100, 150];
     const FIELDS   = ['0-149', '150-499', '500-999', '1000-2000', '2000+'];
     const FORMATS  = ['PKO', 'SKO', 'MKO', 'VNL'];
     const PRIORITIES = ['Niv 1', 'Niv 2', 'Niv 3'];
@@ -1018,9 +1018,9 @@
         const gains   = newTourns.reduce((a, t) => a + t.gains, 0);
         const profit  = Math.round((gains - invest) * 100) / 100;
         const nb      = newTourns.length;
-        const abi     = Math.round((invest / nb) * 100) / 100;
         const itmN    = newTourns.filter(t => t.itm).length;
         const totalEntries = newTourns.reduce((a, t) => a + t.nbEntry, 0);
+        const abi     = totalEntries > 0 ? Math.round((invest / totalEntries) * 100) / 100 : 0;
         const itmRate = Math.round(itmN / totalEntries * 100);
         const reEntries = newTourns.reduce((a, t) => a + Math.max(0, t.nbEntry - 1), 0);
         const roi     = invest > 0 ? Math.round(profit / invest * 100) : 0;
@@ -2049,7 +2049,7 @@
         const totalEntries = filtered.reduce((a, t) => a + t.nbEntry, 0);
         const itmR      = totalEntries > 0 ? ((itm / totalEntries) * 100).toFixed(1) : '0';
         const reEntries = filtered.reduce((a, t) => a + Math.max(0, t.nbEntry - 1), 0);
-        const abi = filtered.length > 0 ? Math.round(invest / filtered.length * 100) / 100 : 0;
+        const abi = totalEntries > 0 ? Math.round(invest / totalEntries * 100) / 100 : 0;
         return { grind: filtSess.length, hours: Math.round(totalH), total: filtered.length, roi, profit, itmR, reEntries, abi };
       }, [filtered, filtSess]);
 
@@ -2110,10 +2110,11 @@
         const byFormatCount = FORMATS.map(f => ({ name:f, value: filtered.filter(t=>t.format===f).length })).filter(x=>x.value>0);
         const byFieldCount  = ['0-149','150-499','500-999','1000-2000','2000+'].map(f => ({ name:f, value: filtered.filter(t=>t.field===f).length })).filter(x=>x.value>0);
         const byBuyinCount  = BUY_INS.map(b => ({ name:`${b}€`, value: filtered.filter(t=>t.buyIn===b).length, _b:b })).filter(x=>x.value>0);
+        const byRoomCount   = ROOMS.map(r => ({ name:r, value: filtered.filter(t=>t.room===r).length })).filter(x=>x.value>0);
 
         return { hGrind: Math.round(hGrind), hTravail: Math.round(hTravail),
                  total: Math.round(total), ratioG, ratioT,
-                 byMomentCount, byFormatCount, byFieldCount, byBuyinCount };
+                 byMomentCount, byFormatCount, byFieldCount, byBuyinCount, byRoomCount };
       }, [filtSess, filtTravail, filtered]);
 
       const byBuyin = useMemo(() => {
@@ -2300,9 +2301,16 @@
                 </LineChart>
               </ResponsiveContainer>
             </div>
+          </div>
+
+          {/* ══════════ ONGLET TOURNOIS ══════════ */}
+          {dashTab === 'tournois' && (<>
+
+          {/* Charts row 2 */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
               <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Room</p>
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={byRoom}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="room" tick={{ fill:'#9ca3af', fontSize:11 }} />
@@ -2314,13 +2322,6 @@
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
-
-          {/* ══════════ ONGLET TOURNOIS ══════════ */}
-          {dashTab === 'tournois' && (<>
-
-          {/* Charts row 2 */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
               <p className="text-sm font-semibold text-gray-300 mb-3">Profit par Format</p>
               <ResponsiveContainer width="100%" height={180}>
@@ -2450,8 +2451,23 @@
             <p className="text-xs text-gray-600 text-center">Total : {structData.total}h sur la période</p>
           </div>
 
-          {/* Tournois par Format + par Type de session */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Tournois par Room + Format + Type de session */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Tournois par Room</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={structData.byRoomCount}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="name" tick={{ fill:'#9ca3af', fontSize:12 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} allowDecimals={false} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} />
+                  <Bar dataKey="value" radius={[4,4,0,0]}>
+                    {structData.byRoomCount.map(e => <Cell key={e.name} fill={ROOM_CHART[e.name]||'#6b7280'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
             <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
               <p className="text-sm font-semibold text-gray-300 mb-3">Tournois par Format</p>
               <ResponsiveContainer width="100%" height={180}>
@@ -2547,20 +2563,26 @@
       const [loaded, setLoaded] = useState(false);
       const ready  = useRef(false);
       const fromFB = useRef(false); // true = changement vient de Firebase, pas besoin de réécrire
+      const initialSync = useRef(true); // true seulement pour le 1er snapshot reçu après ouverture
 
       useEffect(() => {
         const unsub = db.collection('pt').doc(key).onSnapshot(
           snap => {
             if (snap.exists) {
               const remote = snap.data().v;
-              const local  = lsGet(key, initial);
-              // Merge : garde les items locaux absents de Firebase (ajoutés hors-ligne)
               let merged = remote;
-              if (Array.isArray(remote) && Array.isArray(local)) {
-                const remoteIds = new Set(remote.map(x => String(x.id)));
-                const onlyLocal = local.filter(x => x.id != null && !remoteIds.has(String(x.id)));
-                if (onlyLocal.length) merged = [...remote, ...onlyLocal];
+              // Merge (une seule fois, au chargement) : récupère les items ajoutés hors-ligne.
+              // Au-delà du 1er snapshot, on fait confiance à Firebase pour éviter de
+              // ressusciter des items supprimés à cause d'un cache local périmé (autre onglet/appareil).
+              if (initialSync.current) {
+                const local = lsGet(key, initial);
+                if (Array.isArray(remote) && Array.isArray(local)) {
+                  const remoteIds = new Set(remote.map(x => String(x.id)));
+                  const onlyLocal = local.filter(x => x.id != null && !remoteIds.has(String(x.id)));
+                  if (onlyLocal.length) merged = [...remote, ...onlyLocal];
+                }
               }
+              initialSync.current = false;
               // Si merge = remote pur → pas besoin de réécrire dans Firebase
               fromFB.current = (merged === remote);
               setState(merged);
