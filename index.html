@@ -75,6 +75,26 @@
     const FMT_CHART  = { PKO: '#9333ea', SKO: '#6366f1', MKO: '#ec4899', VNL: '#0d9488' };
     const SESSION_CHART = { Jour: '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
 
+    const WINAMAX_STATUS = [
+      { label:'Chrome',          mult:1    },
+      { label:'Aluminium',       mult:1    },
+      { label:'Bronze',          mult:1.25 },
+      { label:'Silver',          mult:1.5  },
+      { label:'Gold',            mult:2    },
+      { label:'Platinum',        mult:2.5  },
+      { label:'Diamond 1★',     mult:3    },
+      { label:'Diamond 2★',     mult:3.5  },
+      { label:'Diamond 3★',     mult:4    },
+      { label:'Diamond 4★',     mult:4.5  },
+      { label:'Diamond 5★',     mult:5    },
+      { label:'Red Diamond 1★', mult:6    },
+      { label:'Red Diamond 2★', mult:6.25 },
+      { label:'Red Diamond 3★', mult:6.5  },
+      { label:'Red Diamond 4★', mult:6.75 },
+      { label:'Red Diamond 5★', mult:7    },
+    ];
+    const EXPRESSO_BUYINS = [1, 2, 3, 5, 10, 20, 50];
+
     // ─── HELPERS ──────────────────────────────────────────────────
     const toStr = d => {
       const y = d.getFullYear();
@@ -1400,7 +1420,7 @@
     }
 
     // ─── TAB 3 — SESSIONS & TOURNOIS ──────────────────────────────
-    function SessionsTab({ sessions, setSessions, playedTournaments, setPlayed }) {
+    function SessionsTab({ sessions, setSessions, playedTournaments, setPlayed, expressoSessions, setExpresso, winamaxStatus }) {
       const [sub, setSub]           = useState('grind');
       const [showForm, setShow]     = useState(false);
       const [page, setPage]         = useState(1);
@@ -1429,6 +1449,35 @@
       const emptyF = { type:'Grind', date:todayStr, start:'18:00', end:'23:00', hands:0, typeSession:'Soir' };
       const [form, setForm] = useState(emptyF);
       const set = k => v => setForm(f => ({ ...f, [k]: v }));
+
+      const emptyE = { date:todayStr, buyIn:5, nbParties:10, nbITM:0, resultat:0, start:'18:00', end:'20:00' };
+      const [eForm, setEForm] = useState(emptyE);
+      const [showE, setShowE] = useState(false);
+      const [confirmDelE, setConfirmDelE] = useState(null);
+      const eSet = k => v => setEForm(f => ({ ...f, [k]: v }));
+
+      const calcMiles = (nbParties, buyIn, statusLabel) => {
+        const s = WINAMAX_STATUS.find(x => x.label === statusLabel) || { mult: 2 };
+        return Math.round(nbParties * 4 * 0.07 * buyIn * s.mult * 100) / 100;
+      };
+
+      const saveExpresso = () => {
+        const newNum = expressoSessions.reduce((max, s) => {
+          const n = parseInt((s.code || '').replace('E', ''), 10);
+          return isNaN(n) ? max : Math.max(max, n);
+        }, 0) + 1;
+        const miles = calcMiles(Number(eForm.nbParties), Number(eForm.buyIn), winamaxStatus);
+        setExpresso(prev => [...prev, {
+          id: uid(), code: `E${newNum}`,
+          date: eForm.date, buyIn: Number(eForm.buyIn),
+          nbParties: Number(eForm.nbParties), nbITM: Number(eForm.nbITM),
+          resultat: Number(eForm.resultat),
+          start: eForm.start, end: eForm.end,
+          duration: calcDuration(eForm.start, eForm.end),
+          miles,
+        }]);
+        setEForm(emptyE); setShowE(false);
+      };
 
       const save = () => {
         const prefix  = form.type === 'Grind' ? 'G' : 'T';
@@ -1461,13 +1510,14 @@
         <>
         <div className="p-4 space-y-4">
           <div className="flex gap-1 border-b border-gray-700">
-            {[['grind','Sessions Grind'],['travail','Sessions Travail'],['tournois','Tournois Joués']].map(([k,l]) => (
+            {[['grind','Sessions Grind'],['travail','Sessions Travail'],['expresso','⚡ Expresso'],['tournois','Tournois Joués']].map(([k,l]) => (
               <button key={k} onClick={() => { setSub(k); setPage(1); }}
                 className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
                   ${sub===k
-                    ? k==='grind'   ? 'border-green-500 text-green-400'
-                    : k==='travail' ? 'border-blue-500 text-blue-400'
-                    :                 'border-purple-500 text-purple-400'
+                    ? k==='grind'    ? 'border-green-500 text-green-400'
+                    : k==='travail'  ? 'border-blue-500 text-blue-400'
+                    : k==='expresso' ? 'border-cyan-500 text-cyan-400'
+                    :                  'border-purple-500 text-purple-400'
                     : 'border-transparent text-gray-400 hover:text-white'}`}>
                 {l}
               </button>
@@ -1704,6 +1754,114 @@
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── Onglet Expresso ── */}
+          {sub === 'expresso' && (
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-300 text-sm">
+                  <span className="text-cyan-400 font-semibold">{expressoSessions.length}</span> sessions Expresso
+                  <span className="ml-3 text-xs text-gray-500">Statut: <span className="text-cyan-300 font-medium">{winamaxStatus}</span> (×{(WINAMAX_STATUS.find(x=>x.label===winamaxStatus)||{mult:2}).mult})</span>
+                </span>
+                {!showE && (
+                  <Btn onClick={() => setShowE(true)} cls="bg-cyan-600 hover:bg-cyan-700 text-white">+ Nouvelle session</Btn>
+                )}
+              </div>
+
+              {showE && (
+                <div className="bg-gray-800 border border-cyan-900/50 rounded-lg p-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Date</label>
+                      <Inp type="date" value={eForm.date} onChange={eSet('date')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Buy-in</label>
+                      <Sel value={eForm.buyIn} onChange={v => eSet('buyIn')(Number(v))} options={EXPRESSO_BUYINS} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Nb parties</label>
+                      <Inp type="number" min="1" value={eForm.nbParties} onChange={v => eSet('nbParties')(Number(v))} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Nb ITM</label>
+                      <Inp type="number" min="0" value={eForm.nbITM} onChange={v => eSet('nbITM')(Number(v))} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Résultat (€)</label>
+                      <Inp type="number" step="0.01" value={eForm.resultat} onChange={v => eSet('resultat')(Number(v))} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Début</label>
+                      <Inp type="time" value={eForm.start} onChange={eSet('start')} cls="w-full" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Fin</label>
+                      <Inp type="time" value={eForm.end} onChange={eSet('end')} cls="w-full" />
+                    </div>
+                    <div className="flex flex-col justify-end">
+                      <p className="text-xs text-gray-500 mb-1">Miles auto</p>
+                      <p className="text-cyan-400 font-semibold text-sm">{calcMiles(Number(eForm.nbParties), Number(eForm.buyIn), winamaxStatus).toFixed(2)} miles</p>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">Durée : {calcDuration(eForm.start, eForm.end)}</div>
+                  <div className="flex gap-2 mt-3">
+                    <Btn onClick={saveExpresso} cls="bg-cyan-600 hover:bg-cyan-700 text-white">Sauvegarder</Btn>
+                    <Btn onClick={() => setShowE(false)} cls="bg-gray-600 hover:bg-gray-700 text-white">Annuler</Btn>
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                    <tr>{['ID','Date','Buy-in','Parties','ITM %','Résultat','Durée','Miles',''].map(h=>(
+                      <th key={h} className="px-3 py-2 text-left">{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {[...expressoSessions].sort((a,b) => (b.date||'').localeCompare(a.date||'')).map(s => {
+                      const itmPct = s.nbParties > 0 ? ((s.nbITM / s.nbParties)*100).toFixed(1) : '0';
+                      const roi    = s.nbParties > 0 ? ((s.resultat / (s.buyIn * s.nbParties))*100).toFixed(1) : '0';
+                      return (
+                        <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
+                          <td className="px-3 py-2 font-mono text-cyan-400 font-semibold">{s.code}</td>
+                          <td className="px-3 py-2 text-gray-300">{s.date}</td>
+                          <td className="px-3 py-2 text-gray-300">{s.buyIn}€</td>
+                          <td className="px-3 py-2 text-gray-300">{s.nbParties}</td>
+                          <td className="px-3 py-2">
+                            <span className="text-gray-300">{itmPct}%</span>
+                            <span className="text-xs text-gray-500 ml-1">ROI {roi}%</span>
+                          </td>
+                          <td className="px-3 py-2 font-bold">
+                            <span className={s.resultat >= 0 ? 'text-green-400' : 'text-red-400'}>
+                              {s.resultat >= 0 ? '+' : ''}{Number(s.resultat).toFixed(2)}€
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-gray-300">{s.duration}</td>
+                          <td className="px-3 py-2 text-cyan-300 text-xs">{Number(s.miles||0).toFixed(2)}</td>
+                          <td className="px-3 py-2">
+                            {confirmDelE === s.id ? (
+                              <div className="flex gap-1">
+                                <button onClick={() => { setExpresso(p => p.filter(x => x.id !== s.id)); setConfirmDelE(null); }}
+                                  className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30">Suppr</button>
+                                <button onClick={() => setConfirmDelE(null)} className="text-gray-400 text-xs px-2 py-0.5 rounded hover:bg-gray-700">✕</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setConfirmDelE(s.id)} className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/30 transition-colors">✕</button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {expressoSessions.length === 0 && (
+                      <tr><td colSpan={9} className="px-3 py-8 text-center text-gray-600 italic">Aucune session Expresso enregistrée</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -2039,7 +2197,7 @@
       );
     }
 
-    function DashboardTab({ sessions, playedTournaments }) {
+    function DashboardTab({ sessions, playedTournaments, expressoSessions = [] }) {
       const [dashTab, setDashTab]     = useState('tournois');
       const [period, setPeriod]       = useState('30');
       const [dateFrom, setDateFrom]   = useState('');
@@ -2145,12 +2303,15 @@
         }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
 
       const structData = useMemo(() => {
-        const parseDur = s => { const p = s.duration.replace('h',':').split(':'); return Number(p[0])+(Number(p[1])||0)/60; };
+        const parseDur = s => { const p = (s.duration||'0h00').replace('h',':').split(':'); return Number(p[0])+(Number(p[1])||0)/60; };
         const hGrind   = filtSess.reduce((a,s) => a + parseDur(s), 0);
         const hTravail = filtTravail.reduce((a,s) => a + parseDur(s), 0);
-        const total    = hGrind + hTravail;
+        const hExpresso = expressoSessions.filter(s => !cutoff || (s.date||'') >= cutoff)
+          .reduce((a,s) => a + parseDur(s), 0);
+        const total    = hGrind + hTravail + hExpresso;
         const ratioG   = total > 0 ? Math.round(hGrind/total*100) : 0;
         const ratioT   = total > 0 ? Math.round(hTravail/total*100) : 0;
+        const ratioE   = total > 0 ? Math.round(hExpresso/total*100) : 0;
 
         const sumEntries = arr => arr.reduce((a,t) => a + (t.nbEntry||1), 0);
 
@@ -2166,7 +2327,8 @@
         const byRoomCount   = ROOMS.map(r => ({ name:r, value: sumEntries(filtered.filter(t=>t.room===r)), fill: ROOM_CHART[r]||'#6b7280' })).filter(x=>x.value>0);
 
         return { hGrind: Math.round(hGrind), hTravail: Math.round(hTravail),
-                 total: Math.round(total), ratioG, ratioT,
+                 hExpresso: Math.round(hExpresso),
+                 total: Math.round(total), ratioG, ratioT, ratioE,
                  byMomentCount, byFormatCount, byFieldCount, byBuyinCount, byRoomCount };
       }, [filtSess, filtTravail, filtered]);
 
@@ -2511,15 +2673,15 @@
 
           <SectionLabel>⏱ Répartition du temps</SectionLabel>
 
-          {/* Ratio Grind / Travail */}
+          {/* Ratio Grind / Travail / Expresso */}
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-5">
-            <div className="flex items-center gap-6 mb-4">
-              <div className="text-center min-w-20">
+            <div className="flex items-center gap-4 mb-4 flex-wrap">
+              <div className="text-center min-w-16">
                 <p className="text-3xl font-bold text-green-400">{structData.hGrind}h</p>
                 <p className="text-xs text-gray-500 mt-1">🎮 Grind</p>
                 <p className="text-xs text-green-500 font-semibold">{structData.ratioG}%</p>
               </div>
-              <div className="flex-1">
+              <div className="flex-1 min-w-32">
                 <div className="flex h-6 rounded-full overflow-hidden bg-gray-900 ring-1 ring-gray-700">
                   {structData.ratioG > 0 && (
                     <div className="bg-gradient-to-r from-green-600 to-green-400 flex items-center justify-center text-xs font-bold text-white transition-all"
@@ -2533,14 +2695,27 @@
                       {structData.ratioT >= 15 ? `${structData.ratioT}%` : ''}
                     </div>
                   )}
+                  {structData.ratioE > 0 && (
+                    <div className="bg-gradient-to-r from-cyan-500 to-cyan-400 flex items-center justify-center text-xs font-bold text-white transition-all"
+                      style={{ width:`${structData.ratioE}%` }}>
+                      {structData.ratioE >= 15 ? `${structData.ratioE}%` : ''}
+                    </div>
+                  )}
                 </div>
                 <p className="text-xs text-gray-600 text-center mt-2">Total : {structData.total}h sur la période</p>
               </div>
-              <div className="text-center min-w-20">
+              <div className="text-center min-w-16">
                 <p className="text-3xl font-bold text-blue-400">{structData.hTravail}h</p>
                 <p className="text-xs text-gray-500 mt-1">💼 Travail</p>
                 <p className="text-xs text-blue-400 font-semibold">{structData.ratioT}%</p>
               </div>
+              {structData.hExpresso > 0 && (
+                <div className="text-center min-w-16">
+                  <p className="text-3xl font-bold text-cyan-400">{structData.hExpresso}h</p>
+                  <p className="text-xs text-gray-500 mt-1">⚡ Expresso</p>
+                  <p className="text-xs text-cyan-400 font-semibold">{structData.ratioE}%</p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2588,7 +2763,7 @@
     }
 
     // ─── LOCALSTORAGE HELPERS ─────────────────────────────────────
-    const LS_KEYS = { grids: 'pt_grids', sessions: 'pt_sessions', played: 'pt_played' };
+    const LS_KEYS = { grids: 'pt_grids', sessions: 'pt_sessions', played: 'pt_played', expresso: 'pt_expresso', status: 'pt_wstatus' };
     const LS_GRIDS_VERSION = '1';
     // Réinitialise uniquement les grilles si la version change (jamais les sessions/tournois)
     (function migrateGrids() {
@@ -2650,6 +2825,145 @@
       }, [state]);
 
       return [state, setState, loaded];
+    }
+
+    // ─── TAB EXPRESSO ─────────────────────────────────────────────
+    function ExpressoTab({ expressoSessions, winamaxStatus }) {
+      const [period, setPeriod] = useState('all');
+
+      const cutoff = useMemo(() => {
+        if (period === 'all') return null;
+        const d = new Date(); d.setDate(d.getDate() - Number(period)); return toStr(d);
+      }, [period]);
+
+      const filtered = useMemo(() =>
+        expressoSessions.filter(s => !cutoff || (s.date || '') >= cutoff),
+      [expressoSessions, cutoff]);
+
+      const stats = useMemo(() => {
+        const nbSessions = filtered.length;
+        const totalParties = filtered.reduce((a, s) => a + (s.nbParties || 0), 0);
+        const totalITM     = filtered.reduce((a, s) => a + (s.nbITM || 0), 0);
+        const totalResultat = Math.round(filtered.reduce((a, s) => a + (s.resultat || 0), 0) * 100) / 100;
+        const totalInvest  = filtered.reduce((a, s) => a + (s.buyIn || 0) * (s.nbParties || 0), 0);
+        const totalMiles   = Math.round(filtered.reduce((a, s) => a + (s.miles || 0), 0) * 100) / 100;
+        const roi  = totalInvest > 0 ? ((totalResultat / totalInvest) * 100).toFixed(1) : '0';
+        const itmPct = totalParties > 0 ? ((totalITM / totalParties) * 100).toFixed(1) : '0';
+        const mult = (WINAMAX_STATUS.find(x => x.label === winamaxStatus) || { mult: 2 }).mult;
+        return { nbSessions, totalParties, totalResultat, totalInvest, roi, itmPct, totalMiles, mult };
+      }, [filtered, winamaxStatus]);
+
+      const ttStyle = { background:'#1f2937', border:'1px solid #374151', color:'#e5e7eb', borderRadius:'6px' };
+
+      const cumulData = useMemo(() => {
+        const sorted = [...filtered].sort((a, b) => (a.date||'').localeCompare(b.date||''));
+        let cum = 0;
+        const map = {};
+        sorted.forEach(s => { cum += (s.resultat || 0); map[s.date] = Math.round(cum * 100) / 100; });
+        return Object.entries(map).map(([d, profit]) => ({ date: d.slice(5), profit }));
+      }, [filtered]);
+
+      const KpiCard = ({ label, value, sub, color = 'text-white' }) => (
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
+          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+          {sub && <p className="text-xs text-gray-500 mt-0.5">{sub}</p>}
+        </div>
+      );
+
+      return (
+        <div className="p-4 space-y-5">
+          {/* Header */}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-cyan-400">⚡ Expresso</h2>
+              <p className="text-xs text-gray-500">Statut <span className="text-cyan-300 font-medium">{winamaxStatus}</span> · multiplicateur ×{stats.mult}</p>
+            </div>
+            <div className="flex gap-1 flex-wrap">
+              {[['7','7j'],['30','30j'],['90','90j'],['all','Tout']].map(([v,l]) => (
+                <button key={v} onClick={() => setPeriod(v)}
+                  className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${period===v ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+
+          {filtered.length === 0 ? (
+            <div className="text-center py-16 text-gray-600">
+              <p className="text-4xl mb-3">⚡</p>
+              <p className="text-sm">Aucune session Expresso sur cette période</p>
+            </div>
+          ) : (
+            <>
+              {/* KPI cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <KpiCard label="Résultat" value={`${stats.totalResultat >= 0 ? '+' : ''}${stats.totalResultat.toFixed(2)}€`}
+                  sub={`Investi: ${stats.totalInvest.toFixed(2)}€`}
+                  color={stats.totalResultat >= 0 ? 'text-green-400' : 'text-red-400'} />
+                <KpiCard label="ROI" value={`${stats.roi}%`}
+                  sub={`${stats.totalParties} parties`}
+                  color={Number(stats.roi) >= 0 ? 'text-green-400' : 'text-red-400'} />
+                <KpiCard label="ITM" value={`${stats.itmPct}%`}
+                  sub={`${filtered.reduce((a,s)=>a+(s.nbITM||0),0)} / ${stats.totalParties}`}
+                  color="text-cyan-400" />
+                <KpiCard label="Miles gagnées" value={`${stats.totalMiles.toFixed(0)}`}
+                  sub={`${stats.nbSessions} sessions`}
+                  color="text-yellow-400" />
+              </div>
+
+              {/* Courbe cumulée */}
+              {cumulData.length > 1 && (
+                <div className="bg-gray-800 border border-gray-700 rounded-xl p-4">
+                  <p className="text-sm font-semibold text-gray-300 mb-3">Profit cumulé</p>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <LineChart data={cumulData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                      <XAxis dataKey="date" tick={{ fill:'#9ca3af', fontSize:11 }} />
+                      <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
+                      <Tooltip contentStyle={ttStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} />
+                      <Line type="monotone" dataKey="profit" stroke="#06b6d4" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Tableau détail */}
+              <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-700">
+                  <p className="text-sm font-semibold text-gray-300">Détail des sessions</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-900 text-gray-400 text-xs uppercase">
+                      <tr>{['Code','Date','Buy-in','Parties','ITM %','ROI %','Résultat','Durée','Miles'].map(h => (
+                        <th key={h} className="px-3 py-2 text-left">{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {[...filtered].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(s => {
+                        const itmP = s.nbParties > 0 ? ((s.nbITM/s.nbParties)*100).toFixed(1) : '0';
+                        const roiP = s.nbParties > 0 ? ((s.resultat/(s.buyIn*s.nbParties))*100).toFixed(1) : '0';
+                        return (
+                          <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
+                            <td className="px-3 py-2 font-mono text-cyan-400 font-semibold">{s.code}</td>
+                            <td className="px-3 py-2 text-gray-300">{s.date}</td>
+                            <td className="px-3 py-2 text-gray-300">{s.buyIn}€</td>
+                            <td className="px-3 py-2 text-gray-300">{s.nbParties}</td>
+                            <td className="px-3 py-2 text-gray-300">{itmP}%</td>
+                            <td className="px-3 py-2"><span className={Number(roiP)>=0?'text-green-400':'text-red-400'}>{roiP}%</span></td>
+                            <td className="px-3 py-2 font-bold"><span className={s.resultat>=0?'text-green-400':'text-red-400'}>{s.resultat>=0?'+':''}{Number(s.resultat).toFixed(2)}€</span></td>
+                            <td className="px-3 py-2 text-gray-300">{s.duration}</td>
+                            <td className="px-3 py-2 text-yellow-400 text-xs">{Number(s.miles||0).toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      );
     }
 
     // ─── LOGIN ────────────────────────────────────────────────────
@@ -2714,6 +3028,8 @@
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
       const [played,     setPlayed,     playedLoaded] = usePersist(LS_KEYS.played,    INIT_PLAYED);
+      const [expressoSessions, setExpresso]           = usePersist(LS_KEYS.expresso,  []);
+      const [winamaxStatus,    setWinamaxStatus]      = usePersist(LS_KEYS.status,    'Gold');
       const [online, setOnline]             = useState(navigator.onLine);
       const [fbError, setFbError]           = useState(false);
       useEffect(() => {
@@ -2764,6 +3080,7 @@
         { id:'library',   emoji:'📋', label:'Mes Grilles'        },
         { id:'grid',      emoji:'📅', label:'Grille du Jour'     },
         { id:'sessions',  emoji:'🎯', label:'Sessions & Tournois'},
+        { id:'expresso',  emoji:'⚡', label:'Expresso'           },
         { id:'dashboard', emoji:'📊', label:'Dashboard'          },
         { id:'records',   emoji:'🏆', label:'Records'            },
       ];
@@ -2779,6 +3096,14 @@
               <p className="text-xs text-gray-600 leading-none mt-0.5 hidden sm:block">Tournament Tracker</p>
             </div>
             <div className="ml-auto flex items-center gap-3">
+              {/* Statut Winamax */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-500 hidden sm:inline">⚡</span>
+                <select value={winamaxStatus} onChange={e => setWinamaxStatus(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 text-cyan-300 text-xs rounded px-2 py-1 focus:outline-none focus:border-cyan-500 cursor-pointer">
+                  {WINAMAX_STATUS.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
+                </select>
+              </div>
               {/* Stats — masquées sur mobile */}
               <div className="hidden md:flex gap-3 text-xs text-gray-600">
                 <span>{savedGrids.length} grilles</span>
@@ -2823,8 +3148,9 @@
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
             <div className={activeTab==='library'   ? '' : 'hidden'}><GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} /></div>
             <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} /></div>
-            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
-            <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
+            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} expressoSessions={expressoSessions} setExpresso={setExpresso} winamaxStatus={winamaxStatus} /></div>
+            <div className={activeTab==='expresso'  ? '' : 'hidden'}><ExpressoTab expressoSessions={expressoSessions} winamaxStatus={winamaxStatus} /></div>
+            <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} expressoSessions={expressoSessions} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
           </main>
 
