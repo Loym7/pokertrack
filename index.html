@@ -1450,7 +1450,7 @@
       const [form, setForm] = useState(emptyF);
       const set = k => v => setForm(f => ({ ...f, [k]: v }));
 
-      const emptyE = { date:todayStr, buyIn:5, nbParties:10, nbITM:0, resultat:0, start:'18:00', end:'20:00' };
+      const emptyE = { date:todayStr, buyIn:5, nbParties:10, itmPct:0, resultat:0, start:'18:00', end:'20:00' };
       const [eForm, setEForm] = useState(emptyE);
       const [showE, setShowE] = useState(false);
       const [confirmDelE, setConfirmDelE] = useState(null);
@@ -1470,7 +1470,7 @@
         setExpresso(prev => [...prev, {
           id: uid(), code: `E${newNum}`,
           date: eForm.date, buyIn: Number(eForm.buyIn),
-          nbParties: Number(eForm.nbParties), nbITM: Number(eForm.nbITM),
+          nbParties: Number(eForm.nbParties), itmPct: Number(eForm.itmPct),
           resultat: Number(eForm.resultat),
           start: eForm.start, end: eForm.end,
           duration: calcDuration(eForm.start, eForm.end),
@@ -1789,8 +1789,8 @@
                       <Inp type="number" min="1" value={eForm.nbParties} onChange={v => eSet('nbParties')(Number(v))} cls="w-full" />
                     </div>
                     <div>
-                      <label className="text-xs text-gray-400 block mb-1">Nb ITM</label>
-                      <Inp type="number" min="0" value={eForm.nbITM} onChange={v => eSet('nbITM')(Number(v))} cls="w-full" />
+                      <label className="text-xs text-gray-400 block mb-1">ITM %</label>
+                      <Inp type="number" min="0" max="100" step="0.1" value={eForm.itmPct} onChange={v => eSet('itmPct')(Number(v))} cls="w-full" />
                     </div>
                     <div>
                       <label className="text-xs text-gray-400 block mb-1">Résultat (€)</label>
@@ -1826,8 +1826,7 @@
                   </thead>
                   <tbody>
                     {[...expressoSessions].sort((a,b) => (b.date||'').localeCompare(a.date||'')).map(s => {
-                      const itmPct = s.nbParties > 0 ? ((s.nbITM / s.nbParties)*100).toFixed(1) : '0';
-                      const roi    = s.nbParties > 0 ? ((s.resultat / (s.buyIn * s.nbParties))*100).toFixed(1) : '0';
+                      const roi = s.nbParties > 0 ? ((s.resultat / (s.buyIn * s.nbParties))*100).toFixed(1) : '0';
                       return (
                         <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
                           <td className="px-3 py-2 font-mono text-cyan-400 font-semibold">{s.code}</td>
@@ -1835,7 +1834,7 @@
                           <td className="px-3 py-2 text-gray-300">{s.buyIn}€</td>
                           <td className="px-3 py-2 text-gray-300">{s.nbParties}</td>
                           <td className="px-3 py-2">
-                            <span className="text-gray-300">{itmPct}%</span>
+                            <span className="text-gray-300">{Number(s.itmPct||0).toFixed(1)}%</span>
                             <span className="text-xs text-gray-500 ml-1">ROI {roi}%</span>
                           </td>
                           <td className="px-3 py-2 font-bold">
@@ -2842,13 +2841,14 @@
 
       const stats = useMemo(() => {
         const nbSessions = filtered.length;
-        const totalParties = filtered.reduce((a, s) => a + (s.nbParties || 0), 0);
-        const totalITM     = filtered.reduce((a, s) => a + (s.nbITM || 0), 0);
+        const totalParties  = filtered.reduce((a, s) => a + (s.nbParties || 0), 0);
         const totalResultat = Math.round(filtered.reduce((a, s) => a + (s.resultat || 0), 0) * 100) / 100;
-        const totalInvest  = filtered.reduce((a, s) => a + (s.buyIn || 0) * (s.nbParties || 0), 0);
-        const totalMiles   = Math.round(filtered.reduce((a, s) => a + (s.miles || 0), 0) * 100) / 100;
-        const roi  = totalInvest > 0 ? ((totalResultat / totalInvest) * 100).toFixed(1) : '0';
-        const itmPct = totalParties > 0 ? ((totalITM / totalParties) * 100).toFixed(1) : '0';
+        const totalInvest   = filtered.reduce((a, s) => a + (s.buyIn || 0) * (s.nbParties || 0), 0);
+        const totalMiles    = Math.round(filtered.reduce((a, s) => a + (s.miles || 0), 0) * 100) / 100;
+        const roi    = totalInvest > 0 ? ((totalResultat / totalInvest) * 100).toFixed(1) : '0';
+        const itmPct = totalParties > 0
+          ? (filtered.reduce((a, s) => a + (s.itmPct || 0) * (s.nbParties || 0), 0) / totalParties).toFixed(1)
+          : '0';
         const mult = (WINAMAX_STATUS.find(x => x.label === winamaxStatus) || { mult: 2 }).mult;
         return { nbSessions, totalParties, totalResultat, totalInvest, roi, itmPct, totalMiles, mult };
       }, [filtered, winamaxStatus]);
@@ -2903,7 +2903,7 @@
                   sub={`${stats.totalParties} parties`}
                   color={Number(stats.roi) >= 0 ? 'text-green-400' : 'text-red-400'} />
                 <KpiCard label="ITM" value={`${stats.itmPct}%`}
-                  sub={`${filtered.reduce((a,s)=>a+(s.nbITM||0),0)} / ${stats.totalParties}`}
+                  sub={`moy. pondérée · ${stats.totalParties} parties`}
                   color="text-cyan-400" />
                 <KpiCard label="Miles gagnées" value={`${stats.totalMiles.toFixed(0)}`}
                   sub={`${stats.nbSessions} sessions`}
@@ -2940,7 +2940,7 @@
                     </thead>
                     <tbody>
                       {[...filtered].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(s => {
-                        const itmP = s.nbParties > 0 ? ((s.nbITM/s.nbParties)*100).toFixed(1) : '0';
+                        const itmP = Number(s.itmPct || 0).toFixed(1);
                         const roiP = s.nbParties > 0 ? ((s.resultat/(s.buyIn*s.nbParties))*100).toFixed(1) : '0';
                         return (
                           <tr key={s.id} className="border-t border-gray-700 hover:bg-gray-800/50">
