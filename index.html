@@ -46,7 +46,7 @@
     } = Recharts;
 
     // ─── CONSTANTS ────────────────────────────────────────────────
-    const ROOMS    = ['Winamax', 'Betclic', 'PMU', 'Live'];
+    const ROOMS    = ['Winamax', 'Betclic', 'PMU', 'Unibet', 'Live'];
     const BUY_INS  = [0, 1, 2, 3, 5, 6, 8, 10, 15, 20, 50, 100, 150];
     const FIELDS   = ['0-149', '150-499', '500-999', '1000-2000', '2000+'];
     const FORMATS  = ['PKO', 'SKO', 'MKO', 'VNL'];
@@ -56,6 +56,7 @@
       Winamax: 'bg-orange-600 text-white',
       Betclic: 'bg-lime-700 text-white',
       PMU:     'bg-blue-600 text-white',
+      Unibet:  'bg-emerald-600 text-white',
       Live:    'bg-yellow-600 text-white',
     };
     const PRIO_CLS = {
@@ -70,8 +71,8 @@
       VNL: 'bg-teal-600 text-white',
     };
 
-    const ROOM_CHART  = { Winamax: '#ea580c', Betclic: '#65a30d', PMU: '#2563eb', Live: '#ca8a04' };
-    const ROOM_BORDER = { Winamax: 'bg-orange-500', Betclic: 'bg-lime-600', PMU: 'bg-blue-500', Live: 'bg-yellow-500' };
+    const ROOM_CHART  = { Winamax: '#ea580c', Betclic: '#65a30d', PMU: '#2563eb', Unibet: '#059669', Live: '#ca8a04' };
+    const ROOM_BORDER = { Winamax: 'bg-orange-500', Betclic: 'bg-lime-600', PMU: 'bg-blue-500', Unibet: 'bg-emerald-500', Live: 'bg-yellow-500' };
     const FMT_CHART  = { PKO: '#9333ea', SKO: '#6366f1', MKO: '#ec4899', VNL: '#0d9488' };
     const SESSION_CHART = { Jour: '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
 
@@ -1871,10 +1872,10 @@
             <div className="space-y-3">
               <span className="text-gray-300 text-sm">{playedTournaments.length} tournois enregistrés</span>
               <div className="overflow-x-auto rounded-lg border border-gray-700">
-                <table className="w-full text-sm" style={{ minWidth: '900px' }}>
+                <table className="w-full text-sm" style={{ minWidth: '1100px' }}>
                   <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
                     <tr>
-                      {['Date','Session','Room','Buy-In','Entry','Re-Entry','Field','Format','ITM','Gains','Entrées','Profit',''].map(h => (
+                      {['Date','Session','Room','Tournoi','Buy-In','Entry','Re-Entry','Field','Format','Place','ITM','Gains','Entrées','Profit',''].map(h => (
                         <th key={h} className="px-3 py-2 text-left">{h}</th>
                       ))}
                     </tr>
@@ -1886,6 +1887,7 @@
                         <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
                         <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
                         <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
+                        <td className="px-3 py-2 text-gray-200 text-xs max-w-[220px] truncate" title={t.notes || t.name || ''}>{t.name || '—'}{t.startTime ? <span className="text-gray-500"> · {t.startTime}</span> : null}</td>
                         <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
                         <td className="px-3 py-2 text-center text-green-400">{t.entry ? '✓' : '—'}</td>
                         <td className="px-3 py-2 text-center">
@@ -1895,6 +1897,7 @@
                         </td>
                         <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
                         <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{t.place ? `${t.place}${t.players ? ' / ' + t.players : ''}` : '—'}</td>
                         <td className="px-3 py-2 text-center">{t.itm ? <span className="text-green-400 font-bold">✓</span> : <span className="text-gray-600">—</span>}</td>
                         <td className="px-3 py-2">
                           {editTournId === t.id ? (
@@ -2826,6 +2829,66 @@
       return [state, setState, loaded];
     }
 
+    // ── usePersistChunked : même principe que usePersist, mais réparti sur plusieurs
+    //    documents Firestore (limite de 1 Mo par document). Doc 0 = clé d'origine.
+    const CHUNK_DOCS = 8;        // capacité : 8 documents
+    const CHUNK_SIZE = 1000;     // éléments par document
+    function usePersistChunked(key, initial) {
+      const [state, setState] = useState(() => lsGet(key, initial));
+      const [loaded, setLoaded] = useState(false);
+      const parts   = useRef(Array(CHUNK_DOCS).fill(null));
+      const seen    = useRef(Array(CHUNK_DOCS).fill(false));
+      const lastW   = useRef(Array(CHUNK_DOCS).fill(null));
+      const ready   = useRef(false);
+      const fromFB  = useRef(false);
+      const docName = i => i === 0 ? key : `${key}_${i}`;
+
+      useEffect(() => {
+        const unsubs = [];
+        for (let i = 0; i < CHUNK_DOCS; i++) {
+          unsubs.push(db.collection('pt').doc(docName(i)).onSnapshot(snap => {
+            parts.current[i] = snap.exists ? (snap.data().v || []) : [];
+            lastW.current[i] = JSON.stringify(parts.current[i]);
+            seen.current[i] = true;
+            if (seen.current.every(Boolean)) {
+              if (i === 0 && !snap.exists && !ready.current) {
+                // première utilisation : on pousse le cache local
+                ready.current = true; setLoaded(true);
+                fromFB.current = false; setState(s => [...s]);
+                return;
+              }
+              const merged = parts.current.flat();
+              fromFB.current = true;
+              setState(merged);
+              lsSet(key, merged);
+              ready.current = true;
+              setLoaded(true);
+            }
+          }, () => { seen.current[i] = true; if (seen.current.every(Boolean)) { ready.current = true; setLoaded(true); } }));
+        }
+        return () => unsubs.forEach(u => u());
+      }, []);
+
+      useEffect(() => {
+        if (fromFB.current) { fromFB.current = false; return; }
+        if (!ready.current) return;
+        lsSet(key, state);
+        const arr = Array.isArray(state) ? state : [];
+        if (arr.length > CHUNK_DOCS * CHUNK_SIZE) { window.dispatchEvent(new CustomEvent('pt-fb-error')); return; }
+        for (let i = 0; i < CHUNK_DOCS; i++) {
+          const chunk = arr.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+          const str = JSON.stringify(chunk);
+          if (str === lastW.current[i]) continue;
+          lastW.current[i] = str;
+          db.collection('pt').doc(docName(i)).set({ v: chunk }).catch(() => {
+            window.dispatchEvent(new CustomEvent('pt-fb-error'));
+          });
+        }
+      }, [state]);
+
+      return [state, setState, loaded];
+    }
+
     // ─── TAB EXPRESSO ─────────────────────────────────────────────
     function ExpressoTab({ expressoSessions, winamaxStatus }) {
       const [period, setPeriod] = useState('all');
@@ -3027,7 +3090,7 @@
       const [activeTab, setActiveTab]       = useState('library');
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
-      const [played,     setPlayed,     playedLoaded] = usePersist(LS_KEYS.played,    INIT_PLAYED);
+      const [played,     setPlayed,     playedLoaded] = usePersistChunked(LS_KEYS.played, INIT_PLAYED);
       const [expressoSessions, setExpresso]           = usePersist(LS_KEYS.expresso,  []);
       const [winamaxStatus,    setWinamaxStatus]      = usePersist(LS_KEYS.status,    'Gold');
       const [online, setOnline]             = useState(navigator.onLine);
