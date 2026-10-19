@@ -1897,7 +1897,7 @@
                         </td>
                         <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
                         <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
-                        <td className="px-3 py-2 text-gray-400 text-xs">{t.place ? `${t.place}${t.players ? ' / ' + t.players : ''}` : '—'}</td>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{t.place ? `${t.place}${t.players ? ' / ' + (t.playersEst ? '~' : '') + t.players : ''}` : (t.players ? `— / ${t.playersEst ? '~' : ''}${t.players}` : '—')}</td>
                         <td className="px-3 py-2 text-center">{t.itm ? <span className="text-green-400 font-bold">✓</span> : <span className="text-gray-600">—</span>}</td>
                         <td className="px-3 py-2">
                           {editTournId === t.id ? (
