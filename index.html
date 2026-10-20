@@ -2966,7 +2966,8 @@
     }
 
     // ─── TAB PLANIFIER (préparer une session à partir de l'historique) ──
-    const PL_K = 40;   // poids du "retour à la moyenne" (en tournois) pour le ROI ajusté
+    const PL_K = 60;   // poids du "retour à la moyenne" (en tournois) pour le ROI ajusté
+    const PL_CAP = 20; // un score est plafonné à 20 buy-ins de profit dans le ROI ajusté (anti coup de chance)
     const plNorm = n => (n || '').replace(/^#\d+\s*-\s*/, '').replace(/[’`]/g, "'").trim().toUpperCase();
     const plPct = x => `${x > 0 ? '+' : ''}${(x * 100).toFixed(0)} %`;
     const plMed = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
@@ -2984,23 +2985,26 @@
       });
       return { global: g, items: Object.entries(groups).map(([k, ts]) => {
         const i = ts.reduce((a, t) => a + t.buyIn * t.nbEntry, 0), p = ts.reduce((a, t) => a + t.profit, 0);
+        const pCap = ts.reduce((a, t) => a + Math.min(t.profit, PL_CAP * t.buyIn), 0);
         const per = i / ts.length;
         const starts = ts.map(t => svMin(t.startTime)).filter(v => v != null);
+        const scheds = ts.map(t => svMin(t.schedTime)).filter(v => v != null);
         const durs = ts.map(t => { const s = svMin(t.startTime), e = svMin(t.endTime); return s != null && e != null && e > s ? e - s : null; }).filter(v => v != null);
         const days = {}; ts.forEach(t => { const d = new Date(t.date + 'T12:00:00').getDay(); days[d] = (days[d] || 0) + 1; });
         const players = ts.map(t => t.players).filter(Boolean);
         return {
           key: k, room: ts[0].room, name: plNorm(ts[0].name), buyIn: ts[0].buyIn, format: ts[0].format,
           n: ts.length, inv: i, profit: p, roi: i ? p / i : 0,
-          adj: (p + PL_K * g * per) / (i + PL_K * per),
+          adj: (pCap + PL_K * g * per) / (i + PL_K * per),
           itm: ts.filter(t => t.itm).length / ts.length,
           entries: ts.reduce((a, t) => a + t.nbEntry, 0) / ts.length,
-          start: plQ(starts, 0.2), dur: plMed(durs) || 60, durMax: durs.length ? Math.max(...durs) : null,
+          start: scheds.length ? plMed(scheds) : plQ(starts, 0.1), dur: plMed(durs) || 60, durMax: durs.length ? Math.max(...durs) : null,
+          lastReg: starts.length >= 3 ? plQ(starts, 0.8) : null,
           players: plMed(players), playersEst: ts.some(t => t.playersEst),
           days, daily: Object.keys(days).length >= 4,
           last: ts.map(t => t.date).sort().slice(-1)[0],
         };
-      }) };
+      }).map(c => ({ ...c, late: c.start != null && c.lastReg != null && c.lastReg > c.start + 5 ? Math.min(c.lastReg, c.start + 150) : null })) };
     }
 
     function PlannerTab({ playedTournaments, plans, setPlans }) {
@@ -3019,6 +3023,10 @@
       const [view, setView] = useState('plan');
       const [q, setQ] = useState('');
       const [sortBy, setSortBy] = useState('adj');
+      const nowStr = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+      const [liveNow, setLiveNow] = useState(nowStr());
+      const [liveTables, setLiveTables] = useState(0);
+      const [liveDone, setLiveDone] = useState(() => new Set());
       const activeRooms = selRooms || rooms;
       const wd = new Date(date + 'T12:00:00').getDay();
       const fromM = svMin(from), toM = svMin(to) ?? 1440;
@@ -3028,13 +3036,13 @@
         c.start != null && activeRooms.includes(c.room) && c.buyIn <= maxBuy && c.n >= minN
         && (!recentCut || c.last >= recentCut)
         && !/\b(DAY|JOUR)\s*\d/i.test(c.name) && !/SERIES|ISLANDS|MILLION WEEK/i.test(c.name)
-        && (c.days[wd] || c.daily) && c.start >= fromM - 15 && c.start <= toM - 30
-      ).sort((a, b) => a.start - b.start), [cat, activeRooms, maxBuy, minN, wd, fromM, toM, recentCut]);
+        && (c.days[wd] || c.daily) && c.start <= toM - 30 && (c.start >= fromM - 15 || (c.late != null && c.late >= fromM))
+      ).map(c => ({ ...c, ps: Math.max(c.start, fromM) })).sort((a, b) => a.ps - b.ps), [cat, activeRooms, maxBuy, minN, wd, fromM, toM, recentCut]);
 
       const auto = useMemo(() => {   // glouton : meilleurs ROI ajustés d'abord, sans dépasser le nombre de tables
         const chosen = [];
-        const fits = c => { for (let m = c.start; m < c.start + c.dur; m += 5) {
-          if (chosen.filter(x => x.start <= m && m < x.start + x.dur).length >= maxTables) return false; } return true; };
+        const fits = c => { for (let m = c.ps; m < c.ps + c.dur; m += 5) {
+          if (chosen.filter(x => x.ps <= m && m < x.ps + x.dur).length >= maxTables) return false; } return true; };
         [...candidates].filter(c => c.adj >= minAdj / 100).sort((a, b) => b.adj - a.adj).forEach(c => { if (fits(c)) chosen.push(c); });
         return new Set(chosen.map(c => c.key));
       }, [candidates, maxTables, minAdj]);
@@ -3043,15 +3051,24 @@
       const toggle = k => { const s = new Set(sel); s.has(k) ? s.delete(k) : s.add(k); setPicked(s); };
 
       const plan = candidates.filter(c => sel.has(c.key));
+      const prio = useMemo(() => {
+        const m = {};
+        [...plan].sort((a, b) => b.adj - a.adj).forEach((c, i) => { m[c.key] = { kind: 'S', n: i + 1 }; });
+        candidates.filter(c => !sel.has(c.key) && c.adj >= minAdj / 100).sort((a, b) => b.adj - a.adj).forEach((c, i) => { m[c.key] = { kind: 'R', n: i + 1 }; });
+        return m;
+      }, [plan, candidates, sel, minAdj]);
+      const prioBadge = c => { const p = prio[c.key]; if (!p) return <span className="text-gray-600 text-xs">—</span>;
+        return p.kind === 'S' ? <Badge cls="bg-amber-600 text-white">Socle {p.n}</Badge> : <Badge cls="bg-sky-800 text-sky-100">Remplaçant {p.n}</Badge>; };
+      const regEnd = c => c.late != null ? c.late : c.start + 30;
       const budget = plan.reduce((a, c) => a + c.buyIn * c.entries, 0);
       const ev = plan.reduce((a, c) => a + c.adj * c.buyIn * c.entries, 0);
-      const pStart = plan.length ? Math.min(...plan.map(c => c.start)) : fromM;
-      const pEnd = plan.length ? Math.max(...plan.map(c => c.start + c.dur)) : toM;
-      let peak = 0; for (let m = pStart; m < pEnd; m += 5) peak = Math.max(peak, plan.filter(c => c.start <= m && m < c.start + c.dur).length);
+      const pStart = plan.length ? Math.min(...plan.map(c => c.ps)) : fromM;
+      const pEnd = plan.length ? Math.max(...plan.map(c => c.ps + c.dur)) : toM;
+      let peak = 0; for (let m = pStart; m < pEnd; m += 5) peak = Math.max(peak, plan.filter(c => c.ps <= m && m < c.ps + c.dur).length);
       const t0 = Math.floor(Math.min(fromM, pStart) / 60) * 60, t1 = Math.ceil(Math.max(toM, pEnd) / 60) * 60, span = Math.max(60, t1 - t0);
       const pos = v => `${((v - t0) / span) * 100}%`;
       const hours = []; for (let h = t0; h <= t1; h += 60) hours.push(h);
-      const load = []; for (let m = t0; m <= t1; m += 15) load.push({ h: svFmt(m), tables: plan.filter(c => c.start <= m && m < c.start + c.dur).length });
+      const load = []; for (let m = t0; m <= t1; m += 15) load.push({ h: svFmt(m), tables: plan.filter(c => c.ps <= m && m < c.ps + c.dur).length });
 
       const badge = c => c.n < 10
         ? <Badge cls="bg-gray-700 text-gray-300">peu de données</Badge>
@@ -3063,7 +3080,7 @@
       const savePlan = () => {
         setPlans(prev => [...(prev || []).filter(p => p.date !== date), {
           id: uid(), date, from, to, budget: Math.round(budget * 100) / 100, ev: Math.round(ev * 100) / 100,
-          items: plan.map(c => ({ key: c.key, name: c.name, room: c.room, buyIn: c.buyIn, time: svFmt(c.start), end: svFmt(c.start + c.dur) })),
+          items: plan.map(c => ({ key: c.key, name: c.name, room: c.room, buyIn: c.buyIn, time: svFmt(c.ps), end: svFmt(c.ps + c.dur) })),
         }].sort((a, b) => a.date.localeCompare(b.date)));
       };
       const loadPlan = p => { setDate(p.date); setFrom(p.from); setTo(p.to); setTimeout(() => setPicked(new Set(p.items.map(i => i.key))), 0); setView('plan'); };
@@ -3076,7 +3093,7 @@
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-lg font-bold text-amber-300">🧭 Planifier une session</h2>
             <div className="flex gap-1 bg-gray-800 rounded-lg p-1 ml-auto">
-              {[['plan','Préparer'],['saved',`Sessions prévues (${(plans || []).length})`],['cat','Catalogue des tournois']].map(([v, l]) => (
+              {[['plan','Préparer'],['live','En session'],['saved',`Sessions prévues (${(plans || []).length})`],['cat','Catalogue des tournois']].map(([v, l]) => (
                 <button key={v} onClick={() => setView(v)} className={`px-3 py-1 rounded text-xs font-medium ${view === v ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
               ))}
             </div>
@@ -3125,9 +3142,9 @@
                       <div className="relative flex-1 h-full">
                         {hours.map(h => <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-700/40" style={{ left: pos(h) }} />)}
                         <div className={`absolute top-1 bottom-1 rounded px-1.5 text-[10px] font-semibold text-white flex items-center whitespace-nowrap overflow-hidden ${c.adj >= 0 ? 'bg-green-700/80' : 'bg-amber-700/80'}`}
-                          style={{ left: pos(c.start), width: `calc(${pos(c.start + c.dur)} - ${pos(c.start)})` }}
+                          style={{ left: pos(c.ps), width: `calc(${pos(c.ps + c.dur)} - ${pos(c.ps)})` }}
                           title={`${c.name} · ${svFmt(c.start)} → ~${svFmt(c.start + c.dur)} · ROI ajusté ${plPct(c.adj)} (${c.n} joués)`}>
-                          {svFmt(c.start)} · {plPct(c.adj)}
+                          {c.ps > c.start ? `late ${svFmt(c.ps)}` : svFmt(c.start)} · {plPct(c.adj)}
                         </div>
                       </div>
                     </div>
@@ -3149,14 +3166,16 @@
             <div className="overflow-x-auto rounded-lg border border-gray-700">
               <table className="w-full text-sm" style={{ minWidth: '1000px' }}>
                 <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                  <tr>{['','Début','Fin ~','Room','Tournoi','Format','Buy-in','Joueurs','Joué','ROI réel','ROI ajusté','ITM',''].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
+                  <tr>{['','Priorité','Début','Late reg ~','Fin ~','Room','Tournoi','Format','Buy-in','Joueurs','Joué','ROI réel','ROI ajusté','ITM',''].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {candidates.map(c => (
                     <tr key={c.key} onClick={() => toggle(c.key)} className={`border-t border-gray-700 cursor-pointer ${sel.has(c.key) ? 'bg-amber-950/40' : 'opacity-60 hover:opacity-100'}`}>
                       <td className="px-3 py-2"><input type="checkbox" readOnly checked={sel.has(c.key)} style={{ accentColor: '#f59e0b' }} /></td>
-                      <td className="px-3 py-2 text-gray-200 font-mono">{svFmt(c.start)}</td>
-                      <td className="px-3 py-2 text-gray-500 font-mono text-xs">{svFmt(c.start + c.dur)}</td>
+                      <td className="px-3 py-2">{prioBadge(c)}</td>
+                      <td className="px-3 py-2 text-gray-200 font-mono">{svFmt(c.start)}{c.ps > c.start && <span className="block text-[10px] text-sky-300">late à {svFmt(c.ps)}</span>}</td>
+                      <td className="px-3 py-2 text-gray-400 font-mono text-xs">{c.late != null ? svFmt(c.late) : '?'}</td>
+                      <td className="px-3 py-2 text-gray-500 font-mono text-xs">{svFmt(c.ps + c.dur)}</td>
                       <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
                       <td className="px-3 py-2 text-gray-200">{c.name}</td>
                       <td className="px-3 py-2"><Badge cls={FMT_CLS[c.format] || 'bg-gray-600 text-white'}>{c.format}</Badge></td>
@@ -3169,17 +3188,74 @@
                       <td className="px-3 py-2">{badge(c)}</td>
                     </tr>
                   ))}
-                  {candidates.length === 0 && <tr><td colSpan={13} className="px-3 py-8 text-center text-gray-500">Aucun tournoi connu sur ce créneau et ce jour avec ces filtres.</td></tr>}
+                  {candidates.length === 0 && <tr><td colSpan={15} className="px-3 py-8 text-center text-gray-500">Aucun tournoi connu sur ce créneau et ce jour avec ces filtres.</td></tr>}
                 </tbody>
               </table>
             </div>
             <div className="flex flex-wrap gap-2 items-center">
               <Btn onClick={savePlan} disabled={!plan.length} cls="bg-amber-600 hover:bg-amber-700 text-white">💾 Enregistrer cette session prévue</Btn>
               {picked && <Btn onClick={() => setPicked(null)} cls="bg-gray-700 hover:bg-gray-600 text-gray-200">↺ Revenir à la proposition</Btn>}
-              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué ({PL_K} tournois de « poids »), pour ne pas surestimer un coup de chance.</p>
+              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué, avec chaque score plafonné à {PL_CAP} buy-ins, pour ne pas surestimer un coup de chance. Late reg : estimé d'après tes propres inscriptions tardives.</p>
             </div>
           </>)}
 
+
+          {view === 'live' && (() => {
+            const nowM = svMin(liveNow);
+            const pool = candidates.filter(c => prio[c.key] && !liveDone.has(c.key));
+            const order = (a, b) => (prio[a.key].kind === prio[b.key].kind ? prio[a.key].n - prio[b.key].n : prio[a.key].kind === 'S' ? -1 : 1);
+            const open = pool.filter(c => c.start - 5 <= nowM && nowM <= regEnd(c)).sort(order);
+            const soon = pool.filter(c => c.start > nowM && c.start <= nowM + 60).sort((a, b) => a.start - b.start);
+            const free = Math.max(0, maxTables - liveTables);
+            const Row = ({ c, go }) => (
+              <div className={`flex flex-wrap items-center gap-2 px-3 py-2 rounded border ${go ? 'border-green-600 bg-green-950/40' : 'border-gray-700 bg-gray-800'}`}>
+                {prioBadge(c)}
+                <span className="font-mono text-gray-300 text-sm">{svFmt(c.start)}</span>
+                <Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge>
+                <span className="text-gray-100 font-medium">{c.name}</span>
+                <span className="text-gray-400 text-sm">{c.buyIn}€</span>
+                <span className={`text-xs font-bold ${c.adj >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.adj)}</span>
+                <span className="text-xs text-gray-500">inscriptions jusqu'à ~{svFmt(regEnd(c))}{c.late == null ? ' (estimation)' : ''}</span>
+                <button onClick={() => { const s = new Set(liveDone); s.add(c.key); setLiveDone(s); setLiveTables(n => n + 1); }}
+                  className="ml-auto px-2 py-1 rounded bg-green-700 hover:bg-green-600 text-white text-xs">Je m'inscris</button>
+                <button onClick={() => { const s = new Set(liveDone); s.add(c.key); setLiveDone(s); }}
+                  className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs">Passer</button>
+              </div>
+            );
+            return (
+              <div className="space-y-4">
+                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 flex flex-wrap gap-4 items-end">
+                  <div><p className="text-xs text-gray-500 mb-1">Heure</p>
+                    <div className="flex gap-1"><input type="time" value={liveNow} onChange={e => setLiveNow(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" />
+                    <button onClick={() => setLiveNow(nowStr())} className="px-2 py-1 rounded bg-gray-700 text-xs text-gray-300">maintenant</button></div></div>
+                  <div><p className="text-xs text-gray-500 mb-1">Tables en cours</p>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setLiveTables(n => Math.max(0, n - 1))} className="px-3 py-1 rounded bg-red-800 hover:bg-red-700 text-white text-sm">Bust −1</button>
+                      <span className="w-10 text-center text-xl font-bold text-white">{liveTables}</span>
+                      <button onClick={() => setLiveTables(n => n + 1)} className="px-3 py-1 rounded bg-gray-700 text-white text-sm">+1</button>
+                      <span className="text-xs text-gray-500 ml-1">/ {maxTables} max</span>
+                    </div></div>
+                  <div className="text-sm"><p className="text-xs text-gray-500 mb-1">Places libres</p><p className={`text-xl font-bold ${free > 0 ? 'text-green-400' : 'text-gray-500'}`}>{free}</p></div>
+                  <p className="text-xs text-gray-500 max-w-sm">Basé sur la session préparée ({date}, {from} → {to}) : socle d'abord, puis remplaçants par ordre de priorité.</p>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-200 mb-2">{free > 0 ? `À lancer maintenant (${Math.min(free, open.length)})` : 'Tu es au maximum de tables : attends un bust'}</p>
+                  <div className="space-y-1.5">
+                    {open.length === 0 && <p className="text-sm text-gray-500">Aucun tournoi prévu n'est ouvert aux inscriptions en ce moment.</p>}
+                    {open.map((c, i) => <Row key={c.key} c={c} go={i < free} />)}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-200 mb-2">Dans l'heure qui vient</p>
+                  <div className="space-y-1.5">
+                    {soon.length === 0 && <p className="text-sm text-gray-500">Rien de prévu dans l'heure.</p>}
+                    {soon.map(c => <Row key={c.key} c={c} go={false} />)}
+                  </div>
+                </div>
+                {liveDone.size > 0 && <button onClick={() => { setLiveDone(new Set()); setLiveTables(0); }} className="text-xs text-gray-500 underline">Réinitialiser la session en cours</button>}
+              </div>
+            );
+          })()}
           {view === 'saved' && (
             <div className="space-y-3">
               {(plans || []).length === 0 && <p className="text-sm text-gray-500">Aucune session prévue enregistrée.</p>}
