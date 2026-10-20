@@ -2753,6 +2753,218 @@
       return [state, setState, loaded];
     }
 
+    // ─── TAB MES SESSIONS (vue détaillée d'une session) ───────────
+    const SV_DAY_CUT = 6 * 60;  // avant 6h = nuit de la session de la veille
+    const svMin = hhmm => {
+      if (!hhmm) return null;
+      const [h, m] = hhmm.split(':').map(Number);
+      if (isNaN(h)) return null;
+      const v = h * 60 + (m || 0);
+      return v < SV_DAY_CUT ? v + 1440 : v;
+    };
+    const svFmt = v => { const x = ((v % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+    const svDur = m => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, '0')}`;
+    const svEur = (x, sign = false) => `${sign && x > 0 ? '+' : ''}${(Math.round(x * 100) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+    const SV_ROOM_BAR = { Winamax:'#ea580c', Betclic:'#65a30d', PMU:'#2563eb', Unibet:'#059669', Live:'#ca8a04' };
+
+    function MySessionsTab({ sessions, playedTournaments }) {
+      const byCode = useMemo(() => {
+        const m = {};
+        playedTournaments.forEach(t => { (m[t.session] = m[t.session] || []).push(t); });
+        return m;
+      }, [playedTournaments]);
+
+      const list = useMemo(() => sessions
+        .filter(s => byCode[s.code] && byCode[s.code].length)
+        .map(s => {
+          const ts = byCode[s.code];
+          const inv = ts.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
+          const profit = ts.reduce((a, t) => a + (t.profit || 0), 0);
+          return { ...s, ts, inv, profit };
+        })
+        .sort((a, b) => (b.date + (b.start || '')).localeCompare(a.date + (a.start || ''))), [sessions, byCode]);
+
+      const months = useMemo(() => [...new Set(list.map(s => s.date.slice(0, 7)))], [list]);
+      const [month, setMonth] = useState('');
+      const [code, setCode] = useState('');
+      const curMonth = month || months[0] || '';
+      const monthList = list.filter(s => s.date.startsWith(curMonth));
+      const sel = list.find(s => s.code === code) || monthList[0] || list[0];
+      const idx = sel ? list.indexOf(sel) : -1;
+      const go = d => { const n = list[idx + d]; if (n) { setCode(n.code); setMonth(n.date.slice(0, 7)); } };
+
+      if (!sel) return <div className="p-6 text-gray-500">Aucune session importée pour l'instant.</div>;
+
+      const ts = [...sel.ts].map(t => {
+        const st = svMin(t.startTime);
+        let en = svMin(t.endTime);
+        if (st != null && (en == null || en < st)) en = st + 20;
+        return { ...t, _st: st, _en: en };
+      }).sort((a, b) => (a._st ?? 0) - (b._st ?? 0));
+      const inv = sel.inv, gains = ts.reduce((a, t) => a + (t.gains || 0), 0), profit = gains - inv;
+      const entries = ts.reduce((a, t) => a + t.nbEntry, 0);
+      const itm = ts.filter(t => t.itm).length;
+      const bounty = ts.reduce((a, t) => a + (t.bounty || 0), 0);
+      const hands = ts.reduce((a, t) => a + (t.hands || 0), 0);
+      const timed = ts.filter(t => t._st != null);
+      const t0 = timed.length ? Math.floor(Math.min(...timed.map(t => t._st)) / 60) * 60 : 0;
+      const t1 = timed.length ? Math.ceil(Math.max(...timed.map(t => t._en)) / 60) * 60 : 60;
+      const span = Math.max(60, t1 - t0);
+      const pos = v => `${((v - t0) / span) * 100}%`;
+      const hours = []; for (let h = t0; h <= t1; h += 60) hours.push(h);
+
+      // profit cumulé au fil de la session (à la fin de chaque tournoi)
+      const curve = (() => {
+        const ev = timed.map(t => ({ at: t._en, p: t.profit || 0 })).sort((a, b) => a.at - b.at);
+        let c = 0; const out = [{ h: svFmt(t0), profit: 0 }];
+        ev.forEach(e => { c += e.p; out.push({ h: svFmt(e.at), profit: Math.round(c * 100) / 100 }); });
+        return out;
+      })();
+
+      const dateLong = new Date(sel.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+      const Kpi = ({ label, value, color = 'text-white' }) => (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+          <p className="text-[11px] text-gray-500 mb-0.5">{label}</p>
+          <p className={`text-lg font-bold ${color}`}>{value}</p>
+        </div>
+      );
+
+      return (
+        <div className="p-4 space-y-5">
+          {/* Sélection */}
+          <div className="flex flex-wrap items-end gap-3">
+            <h2 className="text-lg font-bold text-green-400 self-center">🗓️ Mes sessions</h2>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Mois</p>
+              <Sel value={curMonth} onChange={v => { setMonth(v); setCode(''); }}
+                options={months.map(m => ({ value: m, label: new Date(m + '-15').toLocaleDateString('fr-FR', { month:'long', year:'numeric' }) }))} />
+            </div>
+            <div className="flex items-center gap-1 ml-auto">
+              <button onClick={() => go(1)} disabled={idx >= list.length - 1} className="px-3 py-1.5 rounded bg-gray-800 text-gray-300 disabled:opacity-30">◀ Précédente</button>
+              <button onClick={() => go(-1)} disabled={idx <= 0} className="px-3 py-1.5 rounded bg-gray-800 text-gray-300 disabled:opacity-30">Suivante ▶</button>
+            </div>
+          </div>
+
+          {/* Bande des sessions du mois */}
+          <div className="flex gap-1.5 overflow-x-auto pb-1">
+            {[...monthList].reverse().map(s => {
+              const r = s.inv ? s.profit / s.inv : 0;
+              const active = s.code === sel.code;
+              return (
+                <button key={s.code} onClick={() => setCode(s.code)} title={`${s.date} · ${svEur(s.profit, true)}`}
+                  className={`shrink-0 rounded-md px-2 py-1.5 text-left border transition-colors ${active ? 'border-green-400 bg-gray-800' : 'border-gray-700 bg-gray-900 hover:bg-gray-800'}`}>
+                  <p className="text-[10px] text-gray-500">{new Date(s.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday:'short', day:'numeric' })}</p>
+                  <p className={`text-xs font-bold ${s.profit > 0 ? 'text-green-400' : s.profit < 0 ? 'text-red-400' : 'text-gray-400'}`}>{s.profit > 0 ? '+' : ''}{Math.round(s.profit)} €</p>
+                  <div className="h-1 mt-1 rounded" style={{ background: s.profit >= 0 ? `rgba(34,197,94,${Math.min(1, 0.25 + Math.abs(r))})` : `rgba(239,68,68,${Math.min(1, 0.25 + Math.abs(r))})` }} />
+                </button>
+              );
+            })}
+          </div>
+
+          {/* En-tête de la session */}
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <p className="text-xl font-bold text-white capitalize">{dateLong}</p>
+            <p className="text-sm text-gray-400">{sel.code} · {sel.typeSession} · {sel.start} → {sel.end} ({sel.duration})</p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+            <Kpi label={entries > ts.length ? `Tournois (${entries} entrées)` : 'Tournois'} value={ts.length} />
+            <Kpi label="Investi" value={svEur(inv)} />
+            <Kpi label="Gains" value={svEur(gains)} />
+            <Kpi label="Profit" value={svEur(profit, true)} color={profit >= 0 ? 'text-green-400' : 'text-red-400'} />
+            <Kpi label="ROI" value={inv ? `${profit >= 0 ? '+' : ''}${(profit / inv * 100).toFixed(1)} %` : '—'} color={profit >= 0 ? 'text-green-400' : 'text-red-400'} />
+            <Kpi label="ITM" value={`${itm}/${ts.length}`} />
+            <Kpi label="Bounties" value={svEur(bounty)} color="text-purple-300" />
+            <Kpi label="Mains" value={hands.toLocaleString('fr-FR')} />
+          </div>
+
+          {/* Courbe de la session */}
+          {curve.length > 2 && (
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+              <p className="text-xs text-gray-400 mb-2">Profit cumulé au fil de la session</p>
+              <ResponsiveContainer width="100%" height={160}>
+                <LineChart data={curve} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid stroke="#374151" strokeDasharray="3 3" />
+                  <XAxis dataKey="h" tick={{ fill:'#9ca3af', fontSize:10 }} />
+                  <YAxis tick={{ fill:'#9ca3af', fontSize:10 }} />
+                  <Tooltip contentStyle={{ background:'#1f2937', border:'1px solid #374151', borderRadius:6 }} labelStyle={{ color:'#9ca3af' }} formatter={v => [svEur(v, true), 'Profit']} />
+                  <Line type="stepAfter" dataKey="profit" stroke={profit >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Frise des tournois */}
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 overflow-x-auto">
+            <p className="text-xs text-gray-400 mb-2">Frise de la session</p>
+            <div style={{ minWidth: 640 }}>
+              <div className="relative h-5 ml-[190px] border-b border-gray-700">
+                {hours.map(h => (
+                  <span key={h} className="absolute text-[10px] text-gray-500 -translate-x-1/2" style={{ left: pos(h) }}>{svFmt(h)}</span>
+                ))}
+              </div>
+              {ts.map(t => (
+                <div key={t.id} className="flex items-center h-7 border-b border-gray-700/40">
+                  <div className="w-[190px] shrink-0 pr-2 flex items-center gap-1.5 overflow-hidden">
+                    <span className="w-1.5 h-4 rounded-sm shrink-0" style={{ background: SV_ROOM_BAR[t.room] || '#6b7280' }} />
+                    <span className="text-xs text-gray-200 truncate" title={t.name}>{t.name || t.room}</span>
+                    <span className="text-[10px] text-gray-500 shrink-0">{t.buyIn}€</span>
+                  </div>
+                  <div className="relative flex-1 h-full">
+                    {hours.map(h => <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-700/40" style={{ left: pos(h) }} />)}
+                    {t._st != null && (
+                      <div className={`absolute top-1 bottom-1 rounded flex items-center px-1.5 text-[10px] font-semibold whitespace-nowrap overflow-hidden
+                        ${t.profit > 0 ? 'bg-green-600/80 text-white' : t.itm ? 'bg-amber-600/80 text-white' : 'bg-gray-600/70 text-gray-100'}`}
+                        style={{ left: pos(t._st), width: `calc(${pos(t._en)} - ${pos(t._st)})`, minWidth: 6 }}
+                        title={`${t.name} · ${t.startTime} → ${t.endTime || '?'} · ${t.place ? t.place + 'e' : ''}${t.players ? ' / ' + (t.playersEst ? '~' : '') + t.players : ''} · ${svEur(t.profit, true)}`}>
+                        {t.nbEntry > 1 ? `×${t.nbEntry} ` : ''}{t.place ? `${t.place}e` : ''}{t.profit > 0 ? ` · ${svEur(t.profit, true)}` : ''}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-4 mt-2 text-[10px] text-gray-500">
+              <span><span className="inline-block w-2.5 h-2.5 rounded-sm bg-green-600/80 mr-1 align-middle" />Gagnant</span>
+              <span><span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-600/80 mr-1 align-middle" />ITM mais perdant</span>
+              <span><span className="inline-block w-2.5 h-2.5 rounded-sm bg-gray-600/70 mr-1 align-middle" />Sorti sans ITM</span>
+              <span className="ml-auto">Couleur à gauche : la room</span>
+            </div>
+          </div>
+
+          {/* Tableau détaillé */}
+          <div className="overflow-x-auto rounded-lg border border-gray-700">
+            <table className="w-full text-sm" style={{ minWidth: '1150px' }}>
+              <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                <tr>{['Horaire','Durée','Room','Tournoi','Format','Buy-in','Entrées','Joueurs','Place','Prize','Bounty','Gains','Profit','Mains'].map(h => <th key={h} className="px-3 py-2 text-left">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {ts.map(t => (
+                  <tr key={t.id} className={`border-t border-gray-700 ${t.profit > 0 ? 'bg-green-950/40' : ''}`} title={t.notes || ''}>
+                    <td className="px-3 py-2 text-gray-400 text-xs whitespace-nowrap">{t.startTime || '—'} → {t.endTime || '?'}</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{t._st != null ? svDur(t._en - t._st) : '—'}</td>
+                    <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
+                    <td className="px-3 py-2 text-gray-200 max-w-[240px] truncate">{t.name || '—'}{t.notes ? <span className="text-yellow-500"> *</span> : null}</td>
+                    <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format] || 'bg-gray-600 text-white'}>{t.format}</Badge></td>
+                    <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
+                    <td className="px-3 py-2 text-gray-400">{t.nbEntry}</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{t.players ? `${t.playersEst ? '~' : ''}${t.players}` : '—'}</td>
+                    <td className="px-3 py-2 text-gray-300">{t.place || '—'}</td>
+                    <td className="px-3 py-2 text-gray-300">{t.prize ? svEur(t.prize) : '—'}</td>
+                    <td className="px-3 py-2 text-purple-300">{t.bounty ? svEur(t.bounty) : '—'}</td>
+                    <td className="px-3 py-2 text-gray-200">{t.gains ? svEur(t.gains) : '—'}</td>
+                    <td className={`px-3 py-2 font-bold ${t.profit > 0 ? 'text-green-400' : t.profit < 0 ? 'text-red-400' : 'text-gray-400'}`}>{svEur(t.profit, true)}</td>
+                    <td className="px-3 py-2 text-gray-500 text-xs">{t.hands || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-gray-500">* tournoi avec une remarque (survole la ligne pour la lire). « ~ » : nombre de joueurs estimé.</p>
+        </div>
+      );
+    }
+
     // ─── TAB ANALYSE STATISTIQUE ──────────────────────────────────
     // ROI = profit total / investi total d'un segment. Intervalles de confiance et
     // tests par bootstrap (rééchantillonnage des tournois), adaptés aux résultats MTT
@@ -3060,7 +3272,7 @@
     // ─── ROOT ─────────────────────────────────────────────────────
     function PokerTracker() {
       const [unlocked, setUnlocked] = useState(() => localStorage.getItem(PT_AUTH_KEY) === PT_PWD_HASH);
-      const [activeTab, setActiveTab]       = useState('library');
+      const [activeTab, setActiveTab]       = useState('mysessions');
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
       const [played,     setPlayed,     playedLoaded] = usePersistChunked(LS_KEYS.played, INIT_PLAYED);
@@ -3111,9 +3323,8 @@
       if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
 
       const TABS = [
-        { id:'library',   emoji:'📋', label:'Mes Grilles'        },
-        { id:'grid',      emoji:'📅', label:'Grille du Jour'     },
-        { id:'sessions',  emoji:'🎯', label:'Sessions & Tournois'},
+        { id:'mysessions', emoji:'🗓️', label:'Mes sessions'      },
+        { id:'sessions',  emoji:'🎯', label:'Journal'            },
         { id:'dashboard', emoji:'📊', label:'Dashboard'          },
         { id:'records',   emoji:'🏆', label:'Records'            },
         { id:'analyse',   emoji:'🔬', label:'Analyse'            },
@@ -3132,8 +3343,6 @@
             <div className="ml-auto flex items-center gap-3">
               {/* Stats — masquées sur mobile */}
               <div className="hidden md:flex gap-3 text-xs text-gray-600">
-                <span>{savedGrids.length} grilles</span>
-                <span>·</span>
                 <span>{sessions.length} sessions</span>
                 <span>·</span>
                 <span>{played.length} tournois</span>
@@ -3172,8 +3381,7 @@
 
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
-            <div className={activeTab==='library'   ? '' : 'hidden'}><GridsTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} /></div>
-            <div className={activeTab==='grid'      ? '' : 'hidden'}><DailyGridTab savedGrids={savedGrids} setSavedGrids={setSavedGrids} setPlayedTournaments={setPlayed} sessions={sessions} setSessions={setSessions} playedTournaments={played} /></div>
+            <div className={activeTab==='mysessions' ? '' : 'hidden'}><MySessionsTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
