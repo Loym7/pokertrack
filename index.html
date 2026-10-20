@@ -49,7 +49,7 @@
     const ROOMS    = ['Winamax', 'Betclic', 'PMU', 'Unibet', 'Live'];
     const BUY_INS  = [0, 1, 2, 3, 5, 6, 8, 10, 15, 20, 50, 100, 150];
     const FIELDS   = ['0-149', '150-499', '500-999', '1000-2000', '2000+'];
-    const FORMATS  = ['PKO', 'SKO', 'MKO', 'VNL'];
+    const FORMATS  = ['PKO', 'SKO', 'TRIDENT', 'MKO', 'VNL'];
     const PRIORITIES = ['Niv 1', 'Niv 2', 'Niv 3'];
 
     const ROOM_CLS = {
@@ -67,13 +67,14 @@
     const FMT_CLS = {
       PKO: 'bg-purple-600 text-white',
       SKO: 'bg-indigo-500 text-white',
+      TRIDENT: 'bg-sky-600 text-white',
       MKO: 'bg-pink-600 text-white',
       VNL: 'bg-teal-600 text-white',
     };
 
     const ROOM_CHART  = { Winamax: '#ea580c', Betclic: '#65a30d', PMU: '#2563eb', Unibet: '#059669', Live: '#ca8a04' };
     const ROOM_BORDER = { Winamax: 'bg-orange-500', Betclic: 'bg-lime-600', PMU: 'bg-blue-500', Unibet: 'bg-emerald-500', Live: 'bg-yellow-500' };
-    const FMT_CHART  = { PKO: '#9333ea', SKO: '#6366f1', MKO: '#ec4899', VNL: '#0d9488' };
+    const FMT_CHART  = { PKO: '#9333ea', SKO: '#6366f1', TRIDENT: '#0284c7', MKO: '#ec4899', VNL: '#0d9488' };
     const SESSION_CHART = { Jour: '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
 
     const WINAMAX_STATUS = [
