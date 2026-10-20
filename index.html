@@ -3575,64 +3575,79 @@
       );
     }
 
-    // ─── LOGIN ────────────────────────────────────────────────────
-    const PT_AUTH_KEY = 'pt_auth';
-    const PT_PWD_HASH = btoa('Brume');
+    // ─── LOGIN (compte Google via Firebase Authentication) ────────
+    const fbAuth = firebase.auth();
+    const ptSignOut = () => {
+      try { Object.keys(localStorage).filter(k => k.startsWith('pt_')).forEach(k => localStorage.removeItem(k)); } catch {}
+      fbAuth.signOut();
+    };
 
-    function LoginScreen({ onUnlock }) {
-      const [pwd, setPwd]     = useState('');
-      const [error, setError] = useState(false);
-      const [show, setShow]   = useState(false);
-
-      const tryLogin = () => {
-        if (btoa(pwd) === PT_PWD_HASH) {
-          localStorage.setItem(PT_AUTH_KEY, PT_PWD_HASH);
-          onUnlock();
-        } else {
-          setError(true);
-          setPwd('');
-          setTimeout(() => setError(false), 1500);
+    function LoginScreen() {
+      const [err, setErr] = useState('');
+      const [busy, setBusy] = useState(false);
+      const login = async () => {
+        setErr(''); setBusy(true);
+        const provider = new firebase.auth.GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        try {
+          await fbAuth.signInWithPopup(provider);
+        } catch (e) {
+          if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/cancelled-popup-request'].includes(e.code)) {
+            await fbAuth.signInWithRedirect(provider);
+          } else if (e.code !== 'auth/popup-closed-by-user') {
+            setErr(e.message || 'Connexion impossible');
+          }
         }
+        setBusy(false);
       };
-
       return (
-        <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
           <div className="bg-gray-800 border border-gray-700 rounded-2xl p-8 w-80 shadow-2xl space-y-6">
             <div className="text-center space-y-1">
               <span className="text-5xl">♠</span>
               <h1 className="text-2xl font-bold text-green-400 tracking-wide">PokerTrack</h1>
               <p className="text-xs text-gray-500">Accès privé</p>
             </div>
-            <div className="space-y-3">
-              <div className="relative">
-                <input
-                  type={show ? 'text' : 'password'}
-                  value={pwd}
-                  onChange={e => setPwd(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && tryLogin()}
-                  placeholder="Mot de passe"
-                  className={`w-full bg-gray-700 border rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none pr-10 transition-colors
-                    ${error ? 'border-red-500' : 'border-gray-600 focus:border-green-500'}`}
-                />
-                <button onClick={() => setShow(s => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 text-xs">
-                  {show ? '🙈' : '👁'}
-                </button>
-              </div>
-              {error && <p className="text-red-400 text-xs text-center">Mot de passe incorrect</p>}
-              <button onClick={tryLogin}
-                className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg transition-colors">
-                Entrer
-              </button>
-            </div>
+            <button onClick={login} disabled={busy}
+              className="w-full bg-white hover:bg-gray-100 text-gray-800 font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+              <span className="text-lg font-bold" style={{ color: '#4285F4' }}>G</span> {busy ? 'Connexion…' : 'Se connecter avec Google'}
+            </button>
+            {err && <p className="text-red-400 text-xs text-center">{err}</p>}
           </div>
         </div>
       );
     }
 
-    // ─── ROOT ─────────────────────────────────────────────────────
+    function DeniedScreen({ user }) {
+      return (
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl p-8 w-96 shadow-2xl space-y-4 text-center">
+            <span className="text-4xl">🔒</span>
+            <p className="text-gray-200">Ce compte n'a pas accès à PokerTrack.</p>
+            <p className="text-xs text-gray-500">{user.email}<br />Identifiant : <span className="font-mono select-all">{user.uid}</span></p>
+            <button onClick={ptSignOut} className="text-sm text-green-400 underline">Changer de compte</button>
+          </div>
+        </div>
+      );
+    }
+
     function PokerTracker() {
-      const [unlocked, setUnlocked] = useState(() => localStorage.getItem(PT_AUTH_KEY) === PT_PWD_HASH);
+      const [user, setUser] = useState(undefined);
+      const [denied, setDenied] = useState(false);
+      useEffect(() => fbAuth.onAuthStateChanged(u => { setUser(u || null); setDenied(false); }), []);
+      useEffect(() => {
+        if (!user) return;
+        // test d'accès : si les règles Firestore refusent ce compte, on l'indique clairement
+        db.collection('pt').doc('pt_sessions').get().then(() => setDenied(false)).catch(e => { if (e.code === 'permission-denied') setDenied(true); });
+      }, [user]);
+      if (user === undefined) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500 text-sm">Chargement…</div>;
+      if (!user) return <LoginScreen />;
+      if (denied) return <DeniedScreen user={user} />;
+      return <PokerApp user={user} />;
+    }
+
+    // ─── ROOT ─────────────────────────────────────────────────────
+    function PokerApp({ user }) {
       const [activeTab, setActiveTab]       = useState('mysessions');
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
@@ -3682,8 +3697,6 @@
         });
       }, [sessLoaded, playedLoaded, sessions, played]);
 
-      if (!unlocked) return <LoginScreen onUnlock={() => setUnlocked(true)} />;
-
       const TABS = [
         { id:'mysessions', emoji:'🗓️', label:'Mes sessions'      },
         { id:'planner',   emoji:'🧭', label:'Planifier'          },
@@ -3723,8 +3736,8 @@
                 </div>
               )}
               {/* Lock */}
-              <button onClick={() => auth.signOut()}
-                className="text-gray-600 hover:text-gray-400 transition-colors text-sm" title="Se déconnecter">🔒</button>
+              <button onClick={() => { if (confirm(`Se déconnecter de ${user.email} ?`)) ptSignOut(); }}
+                className="text-gray-600 hover:text-gray-400 transition-colors text-sm" title={`Connecté : ${user.email} · se déconnecter`}>🔒</button>
               {/* Reset — masqué sur mobile */}
               <button onClick={() => { if (confirm('Réinitialiser toutes les données ?')) { setSavedGrids(INIT_GRIDS); setSessions(INIT_SESSIONS); setPlayed(INIT_PLAYED); }}}
                 className="hidden sm:inline text-xs text-gray-600 hover:text-red-400 transition-colors" title="Reset">↺</button>
