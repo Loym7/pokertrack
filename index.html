@@ -2629,7 +2629,7 @@
     }
 
     // ─── LOCALSTORAGE HELPERS ─────────────────────────────────────
-    const LS_KEYS = { grids: 'pt_grids', sessions: 'pt_sessions', played: 'pt_played', expresso: 'pt_expresso', status: 'pt_wstatus' };
+    const LS_KEYS = { grids: 'pt_grids', sessions: 'pt_sessions', played: 'pt_played', expresso: 'pt_expresso', status: 'pt_wstatus', plans: 'pt_plans' };
     const LS_GRIDS_VERSION = '1';
     // Réinitialise uniquement les grilles si la version change (jamais les sessions/tournois)
     (function migrateGrids() {
@@ -2965,6 +2965,291 @@
       );
     }
 
+    // ─── TAB PLANIFIER (préparer une session à partir de l'historique) ──
+    const PL_K = 40;   // poids du "retour à la moyenne" (en tournois) pour le ROI ajusté
+    const plNorm = n => (n || '').replace(/^#\d+\s*-\s*/, '').replace(/[’`]/g, "'").trim().toUpperCase();
+    const plPct = x => `${x > 0 ? '+' : ''}${(x * 100).toFixed(0)} %`;
+    const plMed = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const plQ = (a, q) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(q * (s.length - 1))]; };
+    const PL_DAYS = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+
+    function plCatalogue(played) {
+      const valid = played.filter(t => t.buyIn > 0 && t.startTime);
+      const inv = valid.reduce((a, t) => a + t.buyIn * t.nbEntry, 0), prof = valid.reduce((a, t) => a + t.profit, 0);
+      const g = inv ? prof / inv : 0;
+      const groups = {};
+      valid.forEach(t => {
+        const k = `${t.room}|${plNorm(t.name)}|${t.buyIn}`;
+        (groups[k] = groups[k] || []).push(t);
+      });
+      return { global: g, items: Object.entries(groups).map(([k, ts]) => {
+        const i = ts.reduce((a, t) => a + t.buyIn * t.nbEntry, 0), p = ts.reduce((a, t) => a + t.profit, 0);
+        const per = i / ts.length;
+        const starts = ts.map(t => svMin(t.startTime)).filter(v => v != null);
+        const durs = ts.map(t => { const s = svMin(t.startTime), e = svMin(t.endTime); return s != null && e != null && e > s ? e - s : null; }).filter(v => v != null);
+        const days = {}; ts.forEach(t => { const d = new Date(t.date + 'T12:00:00').getDay(); days[d] = (days[d] || 0) + 1; });
+        const players = ts.map(t => t.players).filter(Boolean);
+        return {
+          key: k, room: ts[0].room, name: plNorm(ts[0].name), buyIn: ts[0].buyIn, format: ts[0].format,
+          n: ts.length, inv: i, profit: p, roi: i ? p / i : 0,
+          adj: (p + PL_K * g * per) / (i + PL_K * per),
+          itm: ts.filter(t => t.itm).length / ts.length,
+          entries: ts.reduce((a, t) => a + t.nbEntry, 0) / ts.length,
+          start: plQ(starts, 0.2), dur: plMed(durs) || 60, durMax: durs.length ? Math.max(...durs) : null,
+          players: plMed(players), playersEst: ts.some(t => t.playersEst),
+          days, daily: Object.keys(days).length >= 4,
+          last: ts.map(t => t.date).sort().slice(-1)[0],
+        };
+      }) };
+    }
+
+    function PlannerTab({ playedTournaments, plans, setPlans }) {
+      const cat = useMemo(() => plCatalogue(playedTournaments), [playedTournaments]);
+      const rooms = useMemo(() => [...new Set(cat.items.map(c => c.room))], [cat]);
+      const [date, setDate] = useState(toStr(new Date()));
+      const [from, setFrom] = useState('18:00');
+      const [to, setTo] = useState('23:30');
+      const [selRooms, setSelRooms] = useState(null);
+      const [maxBuy, setMaxBuy] = useState(20);
+      const [maxTables, setMaxTables] = useState(6);
+      const [minN, setMinN] = useState(3);
+      const [minAdj, setMinAdj] = useState(0);
+      const [recent, setRecent] = useState(60);
+      const [picked, setPicked] = useState(null);   // null = proposition automatique
+      const [view, setView] = useState('plan');
+      const [q, setQ] = useState('');
+      const [sortBy, setSortBy] = useState('adj');
+      const activeRooms = selRooms || rooms;
+      const wd = new Date(date + 'T12:00:00').getDay();
+      const fromM = svMin(from), toM = svMin(to) ?? 1440;
+
+      const recentCut = useMemo(() => { if (!recent) return ''; const d = new Date(date + 'T12:00:00'); d.setDate(d.getDate() - recent); return toStr(d); }, [date, recent]);
+      const candidates = useMemo(() => cat.items.filter(c =>
+        c.start != null && activeRooms.includes(c.room) && c.buyIn <= maxBuy && c.n >= minN
+        && (!recentCut || c.last >= recentCut)
+        && !/\b(DAY|JOUR)\s*\d/i.test(c.name) && !/SERIES|ISLANDS|MILLION WEEK/i.test(c.name)
+        && (c.days[wd] || c.daily) && c.start >= fromM - 15 && c.start <= toM - 30
+      ).sort((a, b) => a.start - b.start), [cat, activeRooms, maxBuy, minN, wd, fromM, toM, recentCut]);
+
+      const auto = useMemo(() => {   // glouton : meilleurs ROI ajustés d'abord, sans dépasser le nombre de tables
+        const chosen = [];
+        const fits = c => { for (let m = c.start; m < c.start + c.dur; m += 5) {
+          if (chosen.filter(x => x.start <= m && m < x.start + x.dur).length >= maxTables) return false; } return true; };
+        [...candidates].filter(c => c.adj >= minAdj / 100).sort((a, b) => b.adj - a.adj).forEach(c => { if (fits(c)) chosen.push(c); });
+        return new Set(chosen.map(c => c.key));
+      }, [candidates, maxTables, minAdj]);
+      useEffect(() => { setPicked(null); }, [date, from, to, maxBuy, maxTables, minN, minAdj, selRooms, recent]);
+      const sel = picked || auto;
+      const toggle = k => { const s = new Set(sel); s.has(k) ? s.delete(k) : s.add(k); setPicked(s); };
+
+      const plan = candidates.filter(c => sel.has(c.key));
+      const budget = plan.reduce((a, c) => a + c.buyIn * c.entries, 0);
+      const ev = plan.reduce((a, c) => a + c.adj * c.buyIn * c.entries, 0);
+      const pStart = plan.length ? Math.min(...plan.map(c => c.start)) : fromM;
+      const pEnd = plan.length ? Math.max(...plan.map(c => c.start + c.dur)) : toM;
+      let peak = 0; for (let m = pStart; m < pEnd; m += 5) peak = Math.max(peak, plan.filter(c => c.start <= m && m < c.start + c.dur).length);
+      const t0 = Math.floor(Math.min(fromM, pStart) / 60) * 60, t1 = Math.ceil(Math.max(toM, pEnd) / 60) * 60, span = Math.max(60, t1 - t0);
+      const pos = v => `${((v - t0) / span) * 100}%`;
+      const hours = []; for (let h = t0; h <= t1; h += 60) hours.push(h);
+      const load = []; for (let m = t0; m <= t1; m += 15) load.push({ h: svFmt(m), tables: plan.filter(c => c.start <= m && m < c.start + c.dur).length });
+
+      const badge = c => c.n < 10
+        ? <Badge cls="bg-gray-700 text-gray-300">peu de données</Badge>
+        : c.adj >= 0.15 ? <Badge cls="bg-green-700 text-white">rentable</Badge>
+        : c.adj >= 0 ? <Badge cls="bg-emerald-900 text-emerald-200">plutôt +</Badge>
+        : c.adj >= -0.15 ? <Badge cls="bg-amber-900 text-amber-200">plutôt −</Badge>
+        : <Badge cls="bg-red-800 text-white">à éviter</Badge>;
+
+      const savePlan = () => {
+        setPlans(prev => [...(prev || []).filter(p => p.date !== date), {
+          id: uid(), date, from, to, budget: Math.round(budget * 100) / 100, ev: Math.round(ev * 100) / 100,
+          items: plan.map(c => ({ key: c.key, name: c.name, room: c.room, buyIn: c.buyIn, time: svFmt(c.start), end: svFmt(c.start + c.dur) })),
+        }].sort((a, b) => a.date.localeCompare(b.date)));
+      };
+      const loadPlan = p => { setDate(p.date); setFrom(p.from); setTo(p.to); setTimeout(() => setPicked(new Set(p.items.map(i => i.key))), 0); setView('plan'); };
+
+      const catRows = useMemo(() => cat.items.filter(c => c.n >= 1 && (!q || c.name.toLowerCase().includes(q.toLowerCase())))
+        .sort((a, b) => sortBy === 'start' ? (a.start ?? 9999) - (b.start ?? 9999) : sortBy === 'n' ? b.n - a.n : b.adj - a.adj), [cat, q, sortBy]);
+
+      return (
+        <div className="p-4 space-y-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-lg font-bold text-amber-300">🧭 Planifier une session</h2>
+            <div className="flex gap-1 bg-gray-800 rounded-lg p-1 ml-auto">
+              {[['plan','Préparer'],['saved',`Sessions prévues (${(plans || []).length})`],['cat','Catalogue des tournois']].map(([v, l]) => (
+                <button key={v} onClick={() => setView(v)} className={`px-3 py-1 rounded text-xs font-medium ${view === v ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+
+          {view === 'plan' && (<>
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 flex flex-wrap gap-3 items-end">
+              <div><p className="text-xs text-gray-500 mb-1">Date</p><input type="date" value={date} onChange={e => setDate(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+              <div><p className="text-xs text-gray-500 mb-1">De</p><input type="time" value={from} onChange={e => setFrom(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+              <div><p className="text-xs text-gray-500 mb-1">À</p><input type="time" value={to} onChange={e => setTo(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+              <div><p className="text-xs text-gray-500 mb-1">Buy-in max</p><Sel value={maxBuy} onChange={v => setMaxBuy(Number(v))} options={[2,5,10,20,50,100].map(v => ({ value: v, label: `${v} €` }))} /></div>
+              <div><p className="text-xs text-gray-500 mb-1">Tables max en même temps</p><Sel value={maxTables} onChange={v => setMaxTables(Number(v))} options={[2,3,4,5,6,8,10,12]} /></div>
+              <div><p className="text-xs text-gray-500 mb-1">Joué au moins</p><Sel value={minN} onChange={v => setMinN(Number(v))} options={[1,3,5,10,20].map(v => ({ value: v, label: `${v} fois` }))} /></div>
+              <div><p className="text-xs text-gray-500 mb-1">Joué récemment</p><Sel value={recent} onChange={v => setRecent(Number(v))} options={[{ value:30, label:'30 derniers jours' }, { value:60, label:'60 derniers jours' }, { value:120, label:'4 derniers mois' }, { value:0, label:'peu importe' }]} /></div>
+              <div><p className="text-xs text-gray-500 mb-1">ROI ajusté mini</p><Sel value={minAdj} onChange={v => setMinAdj(Number(v))} options={[-100,-15,0,10,20].map(v => ({ value: v, label: v === -100 ? 'tous' : `${v > 0 ? '+' : ''}${v} %` }))} /></div>
+              <div className="flex gap-1 flex-wrap">
+                {rooms.map(r => (
+                  <button key={r} onClick={() => setSelRooms(activeRooms.includes(r) ? activeRooms.filter(x => x !== r) : [...activeRooms, r])}
+                    className={`px-2 py-1 rounded text-xs font-semibold ${activeRooms.includes(r) ? ROOM_CLS[r] : 'bg-gray-700 text-gray-500'}`}>{r}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Tournois</p><p className="text-lg font-bold text-white">{plan.length}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Budget prévu (re-entries comprises)</p><p className="text-lg font-bold text-white">{svEur(budget)}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Espérance (ROI ajusté)</p><p className={`text-lg font-bold ${ev >= 0 ? 'text-green-400' : 'text-red-400'}`}>{svEur(ev, true)}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Horaires estimés</p><p className="text-lg font-bold text-white">{plan.length ? `${svFmt(pStart)} → ${svFmt(pEnd)}` : '—'}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Pic de tables</p><p className={`text-lg font-bold ${peak > maxTables ? 'text-red-400' : 'text-white'}`}>{peak}</p></div>
+            </div>
+
+            {plan.length > 0 && (
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 overflow-x-auto">
+                <p className="text-xs text-gray-400 mb-2">Frise prévue (durée = ta durée médiane dans chaque tournoi)</p>
+                <div style={{ minWidth: 640 }}>
+                  <div className="relative h-5 ml-[190px] border-b border-gray-700">
+                    {hours.map(h => <span key={h} className="absolute text-[10px] text-gray-500 -translate-x-1/2" style={{ left: pos(h) }}>{svFmt(h)}</span>)}
+                  </div>
+                  {plan.map(c => (
+                    <div key={c.key} className="flex items-center h-7 border-b border-gray-700/40">
+                      <div className="w-[190px] shrink-0 pr-2 flex items-center gap-1.5 overflow-hidden">
+                        <span className="w-1.5 h-4 rounded-sm shrink-0" style={{ background: SV_ROOM_BAR[c.room] || '#6b7280' }} />
+                        <span className="text-xs text-gray-200 truncate" title={c.name}>{c.name}</span>
+                        <span className="text-[10px] text-gray-500 shrink-0">{c.buyIn}€</span>
+                      </div>
+                      <div className="relative flex-1 h-full">
+                        {hours.map(h => <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-700/40" style={{ left: pos(h) }} />)}
+                        <div className={`absolute top-1 bottom-1 rounded px-1.5 text-[10px] font-semibold text-white flex items-center whitespace-nowrap overflow-hidden ${c.adj >= 0 ? 'bg-green-700/80' : 'bg-amber-700/80'}`}
+                          style={{ left: pos(c.start), width: `calc(${pos(c.start + c.dur)} - ${pos(c.start)})` }}
+                          title={`${c.name} · ${svFmt(c.start)} → ~${svFmt(c.start + c.dur)} · ROI ajusté ${plPct(c.adj)} (${c.n} joués)`}>
+                          {svFmt(c.start)} · {plPct(c.adj)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <ResponsiveContainer width="100%" height={70}>
+                  <BarChart data={load} margin={{ top: 8, right: 0, left: -30, bottom: 0 }}>
+                    <XAxis dataKey="h" tick={{ fill:'#6b7280', fontSize:9 }} interval={3} />
+                    <YAxis tick={{ fill:'#6b7280', fontSize:9 }} allowDecimals={false} />
+                    <Tooltip contentStyle={{ background:'#1f2937', border:'1px solid #374151' }} formatter={v => [v, 'Tables']} />
+                    <Bar dataKey="tables" radius={[2,2,0,0]}>
+                      {load.map((d, i) => <Cell key={i} fill={d.tables > maxTables ? '#ef4444' : '#f59e0b'} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-lg border border-gray-700">
+              <table className="w-full text-sm" style={{ minWidth: '1000px' }}>
+                <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                  <tr>{['','Début','Fin ~','Room','Tournoi','Format','Buy-in','Joueurs','Joué','ROI réel','ROI ajusté','ITM',''].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {candidates.map(c => (
+                    <tr key={c.key} onClick={() => toggle(c.key)} className={`border-t border-gray-700 cursor-pointer ${sel.has(c.key) ? 'bg-amber-950/40' : 'opacity-60 hover:opacity-100'}`}>
+                      <td className="px-3 py-2"><input type="checkbox" readOnly checked={sel.has(c.key)} style={{ accentColor: '#f59e0b' }} /></td>
+                      <td className="px-3 py-2 text-gray-200 font-mono">{svFmt(c.start)}</td>
+                      <td className="px-3 py-2 text-gray-500 font-mono text-xs">{svFmt(c.start + c.dur)}</td>
+                      <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
+                      <td className="px-3 py-2 text-gray-200">{c.name}</td>
+                      <td className="px-3 py-2"><Badge cls={FMT_CLS[c.format] || 'bg-gray-600 text-white'}>{c.format}</Badge></td>
+                      <td className="px-3 py-2 text-gray-300">{c.buyIn}€</td>
+                      <td className="px-3 py-2 text-gray-400 text-xs">{c.players ? `${c.playersEst ? '~' : ''}${c.players}` : '—'}</td>
+                      <td className="px-3 py-2 text-gray-400">{c.n}×</td>
+                      <td className={`px-3 py-2 text-xs ${c.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.roi)}</td>
+                      <td className={`px-3 py-2 font-bold ${c.adj >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.adj)}</td>
+                      <td className="px-3 py-2 text-gray-400 text-xs">{(c.itm * 100).toFixed(0)} %</td>
+                      <td className="px-3 py-2">{badge(c)}</td>
+                    </tr>
+                  ))}
+                  {candidates.length === 0 && <tr><td colSpan={13} className="px-3 py-8 text-center text-gray-500">Aucun tournoi connu sur ce créneau et ce jour avec ces filtres.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Btn onClick={savePlan} disabled={!plan.length} cls="bg-amber-600 hover:bg-amber-700 text-white">💾 Enregistrer cette session prévue</Btn>
+              {picked && <Btn onClick={() => setPicked(null)} cls="bg-gray-700 hover:bg-gray-600 text-gray-200">↺ Revenir à la proposition</Btn>}
+              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué ({PL_K} tournois de « poids »), pour ne pas surestimer un coup de chance.</p>
+            </div>
+          </>)}
+
+          {view === 'saved' && (
+            <div className="space-y-3">
+              {(plans || []).length === 0 && <p className="text-sm text-gray-500">Aucune session prévue enregistrée.</p>}
+              {[...(plans || [])].reverse().map(p => {
+                const real = playedTournaments.filter(t => t.date === p.date);
+                const rInv = real.reduce((a, t) => a + t.buyIn * t.nbEntry, 0), rProf = real.reduce((a, t) => a + t.profit, 0);
+                const doneKeys = new Set(real.map(t => `${t.room}|${plNorm(t.name)}|${t.buyIn}`));
+                return (
+                  <div key={p.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="font-bold text-white capitalize">{new Date(p.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long' })}</p>
+                      <p className="text-xs text-gray-400">{p.from} → {p.to} · {p.items.length} tournois · budget {svEur(p.budget)} · espérance {svEur(p.ev, true)}</p>
+                      {real.length > 0 && <p className={`text-xs font-semibold ${rProf >= 0 ? 'text-green-400' : 'text-red-400'}`}>Réel : {real.length} tournois, {svEur(rInv)} investis, {svEur(rProf, true)}</p>}
+                      <div className="ml-auto flex gap-2">
+                        <Btn onClick={() => loadPlan(p)} cls="bg-gray-700 hover:bg-gray-600 text-gray-200">Ouvrir</Btn>
+                        <Btn onClick={() => setPlans(prev => prev.filter(x => x.id !== p.id))} cls="bg-gray-700 hover:bg-red-700 text-gray-200">Supprimer</Btn>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {p.items.map(i => (
+                        <span key={i.key} className={`text-[11px] px-2 py-0.5 rounded border ${doneKeys.has(i.key) ? 'border-green-600 text-green-300' : 'border-gray-600 text-gray-300'}`}>
+                          {i.time} · {i.name} {i.buyIn}€ <span className="text-gray-500">({i.room})</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {view === 'cat' && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-3 items-end">
+                <Inp value={q} onChange={setQ} placeholder="Rechercher un tournoi…" cls="w-64" />
+                <div><p className="text-xs text-gray-500 mb-1">Trier par</p><Sel value={sortBy} onChange={setSortBy} options={[{ value:'adj', label:'ROI ajusté' }, { value:'n', label:'Nombre de fois joué' }, { value:'start', label:'Heure de début' }]} /></div>
+                <p className="text-xs text-gray-500">{catRows.length} tournois différents · ROI global {plPct(cat.global)}</p>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <table className="w-full text-sm" style={{ minWidth: '1050px' }}>
+                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                    <tr>{['Room','Tournoi','Format','Buy-in','Début','Durée méd.','Jours','Joueurs','Joué','Profit','ROI réel','ROI ajusté',''].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {catRows.map(c => (
+                      <tr key={c.key} className="border-t border-gray-700">
+                        <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
+                        <td className="px-3 py-2 text-gray-200">{c.name}</td>
+                        <td className="px-3 py-2"><Badge cls={FMT_CLS[c.format] || 'bg-gray-600 text-white'}>{c.format}</Badge></td>
+                        <td className="px-3 py-2 text-gray-300">{c.buyIn}€</td>
+                        <td className="px-3 py-2 text-gray-300 font-mono">{c.start != null ? svFmt(c.start) : '—'}</td>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{svDur(c.dur)}</td>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{c.daily ? 'tous les jours' : Object.keys(c.days).map(d => PL_DAYS[d]).join(' ')}</td>
+                        <td className="px-3 py-2 text-gray-400 text-xs">{c.players ? `${c.playersEst ? '~' : ''}${c.players}` : '—'}</td>
+                        <td className="px-3 py-2 text-gray-400">{c.n}×</td>
+                        <td className={`px-3 py-2 ${c.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{svEur(c.profit, true)}</td>
+                        <td className={`px-3 py-2 text-xs ${c.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.roi)}</td>
+                        <td className={`px-3 py-2 font-bold ${c.adj >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.adj)}</td>
+                        <td className="px-3 py-2">{badge(c)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ─── TAB ANALYSE STATISTIQUE ──────────────────────────────────
     // ROI = profit total / investi total d'un segment. Intervalles de confiance et
     // tests par bootstrap (rééchantillonnage des tournois), adaptés aux résultats MTT
@@ -3276,6 +3561,7 @@
       const [savedGrids, setSavedGrids]                = usePersist(LS_KEYS.grids,    INIT_GRIDS);
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
       const [played,     setPlayed,     playedLoaded] = usePersistChunked(LS_KEYS.played, INIT_PLAYED);
+      const [plans,      setPlans]                    = usePersist(LS_KEYS.plans, []);
       const [online, setOnline]             = useState(navigator.onLine);
       const [fbError, setFbError]           = useState(false);
       useEffect(() => {
@@ -3324,6 +3610,7 @@
 
       const TABS = [
         { id:'mysessions', emoji:'🗓️', label:'Mes sessions'      },
+        { id:'planner',   emoji:'🧭', label:'Planifier'          },
         { id:'sessions',  emoji:'🎯', label:'Journal'            },
         { id:'dashboard', emoji:'📊', label:'Dashboard'          },
         { id:'records',   emoji:'🏆', label:'Records'            },
@@ -3382,6 +3669,7 @@
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
             <div className={activeTab==='mysessions' ? '' : 'hidden'}><MySessionsTab sessions={sessions} playedTournaments={played} /></div>
+            <div className={activeTab==='planner'   ? '' : 'hidden'}>{activeTab==='planner' && <PlannerTab playedTournaments={played} plans={plans} setPlans={setPlans} />}</div>
             <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
