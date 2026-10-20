@@ -3015,7 +3015,7 @@
       const [to, setTo] = useState('23:30');
       const [selRooms, setSelRooms] = useState(null);
       const [maxBuy, setMaxBuy] = useState(20);
-      const [maxTables, setMaxTables] = useState(6);
+      const [maxTables, setMaxTables] = useState(9);
       const [minN, setMinN] = useState(3);
       const [minAdj, setMinAdj] = useState(0);
       const [recent, setRecent] = useState(60);
@@ -3105,7 +3105,7 @@
               <div><p className="text-xs text-gray-500 mb-1">De</p><input type="time" value={from} onChange={e => setFrom(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
               <div><p className="text-xs text-gray-500 mb-1">À</p><input type="time" value={to} onChange={e => setTo(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
               <div><p className="text-xs text-gray-500 mb-1">Buy-in max</p><Sel value={maxBuy} onChange={v => setMaxBuy(Number(v))} options={[2,5,10,20,50,100].map(v => ({ value: v, label: `${v} €` }))} /></div>
-              <div><p className="text-xs text-gray-500 mb-1">Tables max en même temps</p><Sel value={maxTables} onChange={v => setMaxTables(Number(v))} options={[2,3,4,5,6,8,10,12]} /></div>
+              <div><p className="text-xs text-gray-500 mb-1">Tables max en même temps</p><Sel value={maxTables} onChange={v => setMaxTables(Number(v))} options={[2,3,4,5,6,7,8,9,10,11,12]} /></div>
               <div><p className="text-xs text-gray-500 mb-1">Joué au moins</p><Sel value={minN} onChange={v => setMinN(Number(v))} options={[1,3,5,10,20].map(v => ({ value: v, label: `${v} fois` }))} /></div>
               <div><p className="text-xs text-gray-500 mb-1">Joué récemment</p><Sel value={recent} onChange={v => setRecent(Number(v))} options={[{ value:30, label:'30 derniers jours' }, { value:60, label:'60 derniers jours' }, { value:120, label:'4 derniers mois' }, { value:0, label:'peu importe' }]} /></div>
               <div><p className="text-xs text-gray-500 mb-1">ROI ajusté mini</p><Sel value={minAdj} onChange={v => setMinAdj(Number(v))} options={[-100,-15,0,10,20].map(v => ({ value: v, label: v === -100 ? 'tous' : `${v > 0 ? '+' : ''}${v} %` }))} /></div>
