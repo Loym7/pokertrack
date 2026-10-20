@@ -2752,6 +2752,255 @@
       return [state, setState, loaded];
     }
 
+    // ─── TAB ANALYSE STATISTIQUE ──────────────────────────────────
+    // ROI = profit total / investi total d'un segment. Intervalles de confiance et
+    // tests par bootstrap (rééchantillonnage des tournois), adaptés aux résultats MTT
+    // très asymétriques. Correction de Holm pour les comparaisons multiples.
+    const AN_B = 1000;          // nombre de rééchantillonnages
+    const AN_MIN_N = 100;       // en dessous : échantillon trop petit (les gros scores rares faussent le bootstrap)
+    function anRng(seed) {      // générateur pseudo-aléatoire reproductible (mulberry32)
+      let a = seed >>> 0;
+      return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    }
+    function anBootRoi(items, rnd) {   // items: [{inv, prof}] -> distribution du ROI
+      const n = items.length, out = new Float64Array(AN_B);
+      for (let b = 0; b < AN_B; b++) {
+        let si = 0, sp = 0;
+        for (let i = 0; i < n; i++) { const it = items[(rnd() * n) | 0]; si += it.inv; sp += it.prof; }
+        out[b] = si > 0 ? sp / si : 0;
+      }
+      return out;
+    }
+    const anQuant = (arr, q) => { const s = Array.from(arr).sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.max(0, Math.floor(q * (s.length - 1))))]; };
+    function anWilson(k, n) {
+      if (!n) return [0, 0];
+      const z = 1.96, p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+      return [(c - m) / d, (c + m) / d];
+    }
+    function anPropP(k1, n1, k2, n2) {  // test z de deux proportions, p bilatéral
+      if (!n1 || !n2) return 1;
+      const p = (k1 + k2) / (n1 + n2), se = Math.sqrt(p * (1 - p) * (1 / n1 + 1 / n2));
+      if (!se) return 1;
+      const z = Math.abs(k1 / n1 - k2 / n2) / se;
+      const t = 1 / (1 + 0.2316419 * z), dd = 0.3989423 * Math.exp(-z * z / 2);
+      const tail = dd * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+      return Math.min(1, 2 * tail);
+    }
+    function anHolm(ps) {               // p-values ajustées (Holm-Bonferroni)
+      const idx = ps.map((p, i) => [p, i]).filter(x => x[0] != null).sort((a, b) => a[0] - b[0]);
+      const out = ps.map(() => null); let run = 0;
+      idx.forEach(([p, i], r) => { run = Math.max(run, Math.min(1, p * (idx.length - r))); out[i] = run; });
+      return out;
+    }
+
+    const AN_PARAMS = [
+      { id:'room',    label:'Room',              key: t => t.room },
+      { id:'buyin',   label:'Buy-in',            key: t => t.buyIn <= 3 ? '≤ 3 €' : t.buyIn <= 6 ? '5 €' : t.buyIn <= 12 ? '10 €' : '20 € et +', order:['≤ 3 €','5 €','10 €','20 € et +'] },
+      { id:'field',   label:'Field',             key: t => t.field || 'inconnu', order:['0-149','150-499','500-999','1000-2000','2000+','inconnu'] },
+      { id:'format',  label:'Format',            key: t => t.format || '?' },
+      { id:'roomfield', label:'Room × Field',    key: t => `${t.room} · ${t.field || '?'}` },
+      { id:'roombuyin', label:'Room × Buy-in',   key: t => `${t.room} · ${t.buyIn <= 6 ? '≤ 5 €' : t.buyIn <= 12 ? '10 €' : '20 € +'}` },
+      { id:'moment',  label:'Moment (Jour / Soir)', key: t => { const h = parseInt((t.startTime || '').slice(0, 2), 10); return isNaN(h) ? '?' : (h >= 17 || h < 6) ? 'Soir' : 'Jour'; } },
+      { id:'heure',   label:'Heure de début',    key: t => { const h = parseInt((t.startTime || '').slice(0, 2), 10); if (isNaN(h)) return '?'; return h < 12 ? 'Matin (< 12h)' : h < 17 ? 'Après-midi (12-17h)' : h < 21 ? 'Soirée (17-21h)' : 'Nuit (≥ 21h)'; }, order:['Matin (< 12h)','Après-midi (12-17h)','Soirée (17-21h)','Nuit (≥ 21h)'] },
+      { id:'jour',    label:'Jour de la semaine', key: t => ['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'][new Date(t.date + 'T12:00:00').getDay()], order:['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'] },
+      { id:'mois',    label:'Mois',              key: t => (t.date || '').slice(0, 7) },
+    ];
+
+    function anAnalyse(tourns, param, seed) {
+      const rnd = anRng(seed);
+      const items = tourns.map(t => ({ t, inv: t.buyIn * t.nbEntry, prof: t.profit, itm: !!t.itm, g: param.key(t) }));
+      const groups = {};
+      items.forEach(it => { (groups[it.g] = groups[it.g] || []).push(it); });
+      let keys = Object.keys(groups);
+      if (param.order) keys.sort((a, b) => (param.order.indexOf(a) + 1 || 99) - (param.order.indexOf(b) + 1 || 99));
+      else keys.sort((a, b) => groups[b].length - groups[a].length);
+      const rows = keys.map(k => {
+        const g = groups[k], rest = items.filter(it => it.g !== k);
+        const inv = g.reduce((a, x) => a + x.inv, 0), prof = g.reduce((a, x) => a + x.prof, 0);
+        const rInv = rest.reduce((a, x) => a + x.inv, 0), rProf = rest.reduce((a, x) => a + x.prof, 0);
+        const roi = inv > 0 ? prof / inv : 0, rRoi = rInv > 0 ? rProf / rInv : 0;
+        const kItm = g.filter(x => x.itm).length, kRest = rest.filter(x => x.itm).length;
+        const row = { key: k, n: g.length, inv, prof, roi, restRoi: rRoi, itm: kItm / g.length, itmCi: anWilson(kItm, g.length),
+                      itmP: anPropP(kItm, g.length, kRest, rest.length), small: g.length < AN_MIN_N || rest.length < AN_MIN_N };
+        if (!row.small) {
+          const bs = anBootRoi(g, rnd), br = anBootRoi(rest, rnd);
+          row.ci = [anQuant(bs, 0.025), anQuant(bs, 0.975)];
+          let le = 0, ge = 0; for (let b = 0; b < AN_B; b++) { const d = bs[b] - br[b]; if (d <= 0) le++; if (d >= 0) ge++; }
+          row.p = Math.min(1, 2 * Math.min(le, ge) / AN_B);
+        }
+        return row;
+      });
+      const adj = anHolm(rows.map(r => r.small ? null : r.p));
+      const adjI = anHolm(rows.map(r => r.small ? null : r.itmP));
+      rows.forEach((r, i) => { r.pAdj = adj[i]; r.itmPAdj = adjI[i]; });
+      return rows;
+    }
+
+    function AnalyseTab({ playedTournaments }) {
+      const [period, setPeriod] = useState('all');
+      const [fRoom, setFRoom]   = useState('');
+      const [paramId, setParamId] = useState('field');
+      const [showHelp, setShowHelp] = useState(false);
+      const [res, setRes] = useState(null);
+      const [summary, setSummary] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      const tourns = useMemo(() => {
+        let cutoff = null;
+        if (period !== 'all') { const d = new Date(); d.setMonth(d.getMonth() - Number(period)); cutoff = toStr(d); }
+        return playedTournaments.filter(t => t.buyIn > 0 && t.nbEntry > 0
+          && (!cutoff || t.date >= cutoff) && (!fRoom || t.room === fRoom));
+      }, [playedTournaments, period, fRoom]);
+
+      const global = useMemo(() => {
+        if (!tourns.length) return null;
+        const items = tourns.map(t => ({ inv: t.buyIn * t.nbEntry, prof: t.profit }));
+        const inv = items.reduce((a, x) => a + x.inv, 0), prof = items.reduce((a, x) => a + x.prof, 0);
+        const bs = anBootRoi(items, anRng(7));
+        const ci = [anQuant(bs, 0.025), anQuant(bs, 0.975)];
+        const half = (ci[1] - ci[0]) / 2;
+        const need = half > 0 ? Math.round(tourns.length * Math.pow(half / 0.05, 2)) : null;
+        return { n: tourns.length, inv, prof, roi: inv ? prof / inv : 0, ci, need };
+      }, [tourns]);
+
+      useEffect(() => {
+        setBusy(true);
+        const id = setTimeout(() => {
+          const param = AN_PARAMS.find(p => p.id === paramId);
+          setRes(anAnalyse(tourns, param, 42));
+          const found = [];
+          AN_PARAMS.filter(p => p.id !== 'mois').forEach(p => {
+            if (fRoom && (p.id === 'room' || p.id === 'roomfield' || p.id === 'roombuyin')) return;
+            anAnalyse(tourns, p, 42).forEach(r => {
+              if (!r.small && r.pAdj != null && r.pAdj < 0.05) found.push({ param: p.label, ...r, kind: 'roi' });
+              else if (!r.small && r.itmPAdj != null && r.itmPAdj < 0.05) found.push({ param: p.label, ...r, kind: 'itm' });
+            });
+          });
+          setSummary(found);
+          setBusy(false);
+        }, 30);
+        return () => clearTimeout(id);
+      }, [tourns, paramId, fRoom]);
+
+      const pct = (x, d = 1) => `${x > 0 ? '+' : ''}${(x * 100).toFixed(d)} %`;
+      const verdict = r => {
+        if (r.small) return <Badge cls="bg-gray-700 text-gray-300">Trop peu de tournois</Badge>;
+        if (r.pAdj < 0.05) return <Badge cls={r.roi > r.restRoi ? 'bg-green-700 text-white' : 'bg-red-700 text-white'}>{r.roi > r.restRoi ? 'Meilleur, significatif' : 'Moins bon, significatif'}</Badge>;
+        if (r.p < 0.10) return <Badge cls="bg-yellow-700 text-white">Tendance à confirmer</Badge>;
+        return <Badge cls="bg-gray-700 text-gray-300">Pas de différence prouvée</Badge>;
+      };
+      const rooms = [...new Set(playedTournaments.map(t => t.room))];
+      // échelle commune pour les barres d'intervalle
+      const span = useMemo(() => {
+        const v = (res || []).filter(r => r.ci).flatMap(r => r.ci).concat(global ? global.ci : []);
+        if (!v.length) return [-1, 1];
+        return [Math.min(-0.5, ...v), Math.max(0.5, ...v)];
+      }, [res, global]);
+      const X = x => `${((x - span[0]) / (span[1] - span[0])) * 100}%`;
+
+      return (
+        <div className="p-4 space-y-6">
+          <div className="flex flex-wrap gap-3 items-end">
+            <h2 className="text-lg font-bold text-indigo-300 self-center">🔬 Analyse statistique</h2>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Période</p>
+              <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
+                {[['3','3 mois'],['6','6 mois'],['all','Tout']].map(([v,l]) => (
+                  <button key={v} onClick={() => setPeriod(v)}
+                    className={`px-3 py-1 rounded text-xs font-medium ${period===v ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Room</p>
+              <Sel value={fRoom} onChange={setFRoom} options={[{ value:'', label:'Toutes' }, ...rooms.map(r => ({ value:r, label:r }))]} />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Comparer selon</p>
+              <Sel value={paramId} onChange={setParamId} options={AN_PARAMS.map(p => ({ value:p.id, label:p.label }))} />
+            </div>
+            <button onClick={() => setShowHelp(h => !h)} className="text-xs text-indigo-300 underline self-center">{showHelp ? 'Masquer' : 'Comment lire cette page ?'}</button>
+          </div>
+
+          {showHelp && (
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 text-sm text-gray-300 space-y-2">
+              <p><b>ROI</b> = profit total ÷ investi total du segment. Les freerolls (buy-in 0 €) sont exclus.</p>
+              <p><b>Intervalle à 95 %</b> : la zone où se situe probablement ton vrai ROI. Il est calculé en rééchantillonnant tes tournois {AN_B} fois (bootstrap), une méthode adaptée aux résultats MTT, dominés par quelques gros scores.</p>
+              <p><b>Différence significative</b> : le ROI du segment est comparé au ROI de tous tes autres tournois. Le verdict tient compte du nombre de comparaisons faites en même temps (correction de Holm), pour éviter les fausses découvertes dues au hasard.</p>
+              <p><b>Tendance à confirmer</b> : un écart qui serait peu probable par hasard s'il était seul, mais pas assez net pour conclure. À surveiller avec plus de volume.</p>
+              <p>Un segment doit compter au moins {AN_MIN_N} tournois pour recevoir un verdict : en dessous, l'absence de gros score rend les calculs trompeurs.</p>
+              <p><b>ITM</b> : bien moins variable que le ROI, il devient significatif beaucoup plus vite. Un écart d'ITM significatif est souvent le premier signal fiable.</p>
+            </div>
+          )}
+
+          {global && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-4"><p className="text-xs text-gray-500 mb-1">Tournois analysés</p><p className="text-2xl font-bold text-white">{global.n}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-4"><p className="text-xs text-gray-500 mb-1">ROI global</p><p className={`text-2xl font-bold ${global.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(global.roi)}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-4"><p className="text-xs text-gray-500 mb-1">Intervalle à 95 %</p><p className="text-xl font-bold text-indigo-300">{pct(global.ci[0], 0)} à {pct(global.ci[1], 0)}</p></div>
+              <div className="bg-gray-800 border border-gray-700 rounded-lg p-4"><p className="text-xs text-gray-500 mb-1">Tournois pour ±5 pts de précision</p><p className="text-2xl font-bold text-white">{global.need ? `≈ ${global.need.toLocaleString('fr-FR')}` : '—'}</p></div>
+            </div>
+          )}
+
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+            <p className="text-sm font-semibold text-gray-200 mb-2">Ce qui ressort vraiment (tous paramètres)</p>
+            {busy && <p className="text-xs text-gray-500">Calcul en cours…</p>}
+            {!busy && summary && summary.length === 0 && (
+              <p className="text-sm text-gray-400">Aucune différence significative pour l'instant. Les écarts visibles peuvent encore s'expliquer par la variance : il faut plus de volume.</p>
+            )}
+            {!busy && summary && summary.length > 0 && (
+              <ul className="space-y-1 text-sm">
+                {summary.map((s, i) => (
+                  <li key={i} className={s.kind === 'roi' ? (s.roi > s.restRoi ? 'text-green-400' : 'text-red-400') : (s.itm > 0.5 ? 'text-green-400' : 'text-indigo-300')}>
+                    {s.kind === 'roi'
+                      ? <>• <b>{s.param} : {s.key}</b> : ROI {pct(s.roi)} contre {pct(s.restRoi)} ailleurs ({s.n} tournois)</>
+                      : <>• <b>{s.param} : {s.key}</b> : ITM {(s.itm * 100).toFixed(1)} %, différent du reste ({s.n} tournois)</>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="overflow-x-auto rounded-lg border border-gray-700">
+            <table className="w-full text-sm" style={{ minWidth: '980px' }}>
+              <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                <tr>{['Segment','Tournois','Investi','Profit','ROI','Intervalle 95 %','','ITM','Verdict ROI'].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {(res || []).map(r => (
+                  <tr key={r.key} className="border-t border-gray-700">
+                    <td className="px-3 py-2 text-gray-200 font-medium">{r.key}</td>
+                    <td className="px-3 py-2 text-gray-400">{r.n}</td>
+                    <td className="px-3 py-2 text-gray-400">{Math.round(r.inv)} €</td>
+                    <td className={`px-3 py-2 ${r.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{r.prof >= 0 ? '+' : ''}{Math.round(r.prof)} €</td>
+                    <td className={`px-3 py-2 font-bold ${r.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(r.roi)}</td>
+                    <td className="px-3 py-2 text-xs text-gray-400">{r.ci ? `${pct(r.ci[0], 0)} à ${pct(r.ci[1], 0)}` : '—'}</td>
+                    <td className="px-3 py-2" style={{ width: 180 }}>
+                      {r.ci && (
+                        <div className="relative h-3">
+                          <div className="absolute top-1/2 h-px bg-gray-600" style={{ left: 0, right: 0 }} />
+                          <div className="absolute top-0 bottom-0 w-px bg-gray-400" style={{ left: X(0) }} />
+                          <div className={`absolute top-1 h-1 rounded ${r.roi >= 0 ? 'bg-green-500/60' : 'bg-red-500/60'}`} style={{ left: X(r.ci[0]), width: `calc(${X(r.ci[1])} - ${X(r.ci[0])})` }} />
+                          <div className="absolute top-0 h-3 w-1 rounded bg-white" style={{ left: X(r.roi) }} />
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-gray-300">
+                      {(r.itm * 100).toFixed(1)} %
+                      {!r.small && r.itmPAdj < 0.05 && <span className="ml-1 text-indigo-300 font-semibold">(significatif)</span>}
+                    </td>
+                    <td className="px-3 py-2">{verdict(r)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-gray-500">Barre : intervalle à 95 % du ROI, trait blanc : ROI observé, trait vertical : 0 %. Un segment est comparé à l'ensemble de tes autres tournois sur la même période.</p>
+        </div>
+      );
+    }
+
     // ─── LOGIN ────────────────────────────────────────────────────
     const PT_AUTH_KEY = 'pt_auth';
     const PT_PWD_HASH = btoa('Brume');
@@ -2866,6 +3115,7 @@
         { id:'sessions',  emoji:'🎯', label:'Sessions & Tournois'},
         { id:'dashboard', emoji:'📊', label:'Dashboard'          },
         { id:'records',   emoji:'🏆', label:'Records'            },
+        { id:'analyse',   emoji:'🔬', label:'Analyse'            },
       ];
 
       return (
@@ -2926,6 +3176,7 @@
             <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
+            <div className={activeTab==='analyse'   ? '' : 'hidden'}>{activeTab==='analyse' && <AnalyseTab playedTournaments={played} />}</div>
           </main>
 
           {/* ── Nav mobile (bottom) ── */}
