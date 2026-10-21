@@ -3116,7 +3116,10 @@
         : c.adj >= -0.15 ? <Badge cls="bg-amber-900 text-amber-200">plutôt −</Badge>
         : <Badge cls="bg-red-800 text-white">à éviter</Badge>;
 
+      const [saved, setSaved] = useState(null);
+      useEffect(() => { setSaved(null); }, [date, picked]);
       const savePlan = () => {
+        setSaved(new Date(date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }));
         setPlans(prev => [...(prev || []).filter(p => p.date !== date), {
           id: uid(), date, from, to, budget: Math.round(budget * 100) / 100, ev: Math.round(ev * 100) / 100,
           items: plan.map(c => ({ key: c.key, name: c.name, room: c.room, buyIn: c.buyIn, time: svFmt(c.ps), end: svFmt(c.ps + c.dur) })),
@@ -3157,6 +3160,11 @@
               </div>
             </div>
 
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn onClick={savePlan} disabled={!plan.length} cls="bg-amber-600 hover:bg-amber-700 text-white">💾 Enregistrer cette session prévue</Btn>
+              {picked && <Btn onClick={() => setPicked(null)} cls="bg-gray-700 hover:bg-gray-600 text-gray-200">↺ Revenir à la proposition</Btn>}
+              {saved && <span className="text-xs text-green-400">✓ Session du {saved} enregistrée : retrouve-la dans « Sessions prévues »</span>}
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
               <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Tournois</p><p className="text-lg font-bold text-white">{plan.length}</p></div>
               <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Budget prévu (re-entries comprises)</p><p className="text-lg font-bold text-white">{svEur(budget)}</p></div>
