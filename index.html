@@ -1958,8 +1958,7 @@
       }, [T, S, scoreBy]);
 
       // ── petits composants
-      const ROOM_DOT = { Winamax: 'bg-red-500', PMU: 'bg-blue-500', Betclic: 'bg-lime-500', Unibet: 'bg-emerald-500', Live: 'bg-amber-500' };
-      const Room = ({ r }) => <span className="inline-flex items-center gap-1.5 text-xs text-gray-400"><span className={`w-1.5 h-1.5 rounded-full ${ROOM_DOT[r] || 'bg-gray-500'}`} />{r}</span>;
+      const Room = ({ r }) => <span className="inline-flex items-center gap-1.5 text-xs text-gray-400"><span className="w-1.5 h-1.5 rounded-full" style={{ background: ROOM_CHART[r] || '#6b7280' }} />{r}</span>;
       const Eyebrow = ({ children, cls = 'text-gray-500' }) => <p className={`text-[10.5px] font-semibold uppercase tracking-[0.14em] ${cls}`}>{children}</p>;
       const Section = ({ title, hint, right, children }) => (
         <section className="space-y-3">
@@ -2310,571 +2309,474 @@
       const [fFormat, setFFormat]     = useState([]);
       const [fBuyin, setFBuyin]       = useState([]);
       const [fField, setFField]       = useState([]);
+      const [showFilters, setShowFilters] = useState(false);
+      const [curveMode, setCurveMode] = useState('eur');     // 'eur' ou 'bb'
+      const [segBy, setSegBy]         = useState('format');  // répartition : room, format, buyIn, field
+      const [query, setQuery]         = useState('');
       const toggle = (set) => (val) => { set(prev => prev.includes(val) ? prev.filter(x=>x!==val) : [...prev, val]); setPage(1); };
       const [sortCol, setSortCol]     = useState('date');
       const [sortDir, setSortDir]     = useState('desc');
       const [page, setPage]           = useState(1);
-      const PER_PAGE = 10;
+      const PER_PAGE = 15;
 
       const isCustom = period === 'custom';
-
       const cutoff = useMemo(() => {
         if (isCustom || period === 'all') return null;
+        if (period === 'year') return `${new Date().getFullYear()}-01-01`;
         const d = new Date(); d.setDate(d.getDate() - Number(period)); return toStr(d);
       }, [period, isCustom]);
+      const inRange = d => isCustom ? (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo) : (!cutoff || d >= cutoff);
 
       const filtered = useMemo(() => playedTournaments.filter(t => {
-        if (isCustom) {
-          if (dateFrom && t.date < dateFrom) return false;
-          if (dateTo   && t.date > dateTo)   return false;
-        } else {
-          if (cutoff && t.date < cutoff) return false;
-        }
-        if (fRoom.length   > 0 && !fRoom.includes(t.room))          return false;
-        if (fFormat.length > 0 && !fFormat.includes(t.format))      return false;
-        if (fBuyin.length  > 0 && !fBuyin.includes(t.buyIn))        return false;
-        if (fField.length  > 0 && !fField.includes(t.field))        return false;
+        if (!inRange(t.date)) return false;
+        if (fRoom.length   > 0 && !fRoom.includes(t.room))     return false;
+        if (fFormat.length > 0 && !fFormat.includes(t.format)) return false;
+        if (fBuyin.length  > 0 && !fBuyin.includes(t.buyIn))   return false;
+        if (fField.length  > 0 && !fField.includes(t.field))   return false;
         return true;
       }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo, fRoom, fFormat, fBuyin, fField]);
 
-      const filtSess = useMemo(() =>
-        sessions.filter(s => {
-          if (s.type !== 'Grind') return false;
-          if (isCustom) {
-            if (dateFrom && s.date < dateFrom) return false;
-            if (dateTo   && s.date > dateTo)   return false;
-          } else {
-            if (cutoff && s.date < cutoff) return false;
-          }
-          return true;
-        }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
+      const filtSess = useMemo(() => sessions.filter(s => s.type === 'Grind' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo]);
+      const parseDur = s => { const p = (s.duration || '0h00').replace('h', ':').split(':'); return Number(p[0]) + (Number(p[1]) || 0) / 60; };
 
       const kpi = useMemo(() => {
-        const totalH = filtSess.reduce((acc, s) => {
-          const parts = s.duration.replace('h', ':').split(':');
-          return acc + Number(parts[0]) + (Number(parts[1]) || 0) / 60;
-        }, 0);
+        const totalH = filtSess.reduce((a, s) => a + parseDur(s), 0);
         const invest = filtered.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
         const gains  = filtered.reduce((a, t) => a + t.gains, 0);
         const profit = Math.round((gains - invest) * 100) / 100;
-        const roi       = invest > 0 ? ((profit / invest) * 100).toFixed(1) : '0';
-        const itm       = filtered.filter(t => t.itm).length;
+        const roi    = invest > 0 ? profit / invest * 100 : 0;
+        const itm    = filtered.filter(t => t.itm).length;
         const totalEntries = filtered.reduce((a, t) => a + t.nbEntry, 0);
-        const itmR      = totalEntries > 0 ? ((itm / totalEntries) * 100).toFixed(1) : '0';
+        const itmR   = totalEntries > 0 ? itm / totalEntries * 100 : 0;
         const reEntries = filtered.reduce((a, t) => a + Math.max(0, t.nbEntry - 1), 0);
-        const abi = totalEntries > 0 ? Math.round(invest / totalEntries * 100) / 100 : 0;
-        const bb = bbStats(filtered);
-        return { grind: filtSess.length, hours: Math.round(totalH), total: filtered.length, roi, profit, itmR, reEntries, abi, bb };
+        const abi    = totalEntries > 0 ? invest / totalEntries : 0;
+        const bounty = filtered.reduce((a, t) => a + (t.bounty || 0), 0);
+        const hands  = filtered.reduce((a, t) => a + (t.hands || 0), 0);
+        const filtersOn = fRoom.length + fFormat.length + fBuyin.length + fField.length > 0;
+        return { grind: filtSess.length, hours: totalH, total: filtered.length, roi, profit, invest, gains, itm, itmR, reEntries, abi, totalEntries,
+          bounty, hands, perHour: !filtersOn && totalH > 0 ? profit / totalH : null, bb: bbStats(filtered) };
       }, [filtered, filtSess]);
 
+      // Courbe en € : un point par tournoi (axe = n° de tournoi), comme la courbe en bb
       const cumulData = useMemo(() => {
-        const sorted = [...filtered].sort((a,b) => a.date.localeCompare(b.date));
-        let cum = 0;
-        const map = {};
-        sorted.forEach(t => { cum += t.profit; map[t.date] = cum; });
-        return Object.entries(map).map(([d, profit]) => ({ date: d.slice(5), profit }));
+        const rows = [...filtered].sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
+        let cum = 0; const out = [{ i: 0, profit: 0 }];
+        rows.forEach((t, k) => { cum += t.profit; out.push({ i: k + 1, profit: Math.round(cum * 100) / 100, date: t.date, name: t.name }); });
+        return out;
       }, [filtered]);
-
       const bbCurve = useMemo(() => bbCumul(filtered), [filtered]);
 
-      const byRoom = useMemo(() => {
+      // Répartition par segment : tournois, investi, profit, ROI, ITM, bb/100 EV
+      const segRows = useMemo(() => {
         const m = {};
-        filtered.forEach(t => { m[t.room] = (m[t.room]||0) + t.profit; });
-        return Object.entries(m).map(([room,profit]) => ({ room, profit }));
-      }, [filtered]);
+        filtered.forEach(t => {
+          const k = t[segBy] ?? '—';
+          const o = m[k] || (m[k] = { k, n: 0, entries: 0, inv: 0, profit: 0, itm: 0, list: [] });
+          o.n += 1; o.entries += t.nbEntry; o.inv += t.buyIn * t.nbEntry; o.profit += t.profit; o.itm += t.itm ? 1 : 0; o.list.push(t);
+        });
+        const ORDER = segBy === 'room' ? ROOMS : segBy === 'format' ? FORMATS : segBy === 'buyIn' ? BUY_INS : FIELDS;
+        return Object.values(m).map(o => ({ ...o, roi: o.inv ? o.profit / o.inv : null, itmR: o.entries ? o.itm / o.entries : 0, bb: bbStats(o.list) }))
+          .sort((a, b) => { const ia = ORDER.indexOf(a.k), ib = ORDER.indexOf(b.k); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+      }, [filtered, segBy]);
+      const segMax = Math.max(1, ...segRows.map(r => Math.abs(r.profit)));
 
-      const byFormat = useMemo(() => {
-        const m = {};
-        filtered.forEach(t => { m[t.format] = (m[t.format]||0) + t.profit; });
-        return Object.entries(m).map(([format,profit]) => ({ format, profit }));
-      }, [filtered]);
-
-      const byField = useMemo(() => {
-        const ORDER = ['0-149','150-499','500-999','1000-2000','2000+'];
-        const m = {};
-        filtered.forEach(t => { m[t.field] = (m[t.field]||0) + t.profit; });
-        return ORDER.filter(f => f in m).map(f => ({ field: f, profit: m[f] }));
-      }, [filtered]);
-
-      // ── Données dashboard Structure ──
-      const filtTravail = useMemo(() =>
-        sessions.filter(s => {
-          if (s.type !== 'Travail') return false;
-          if (isCustom) {
-            if (dateFrom && s.date < dateFrom) return false;
-            if (dateTo   && s.date > dateTo)   return false;
-          } else {
-            if (cutoff && s.date < cutoff) return false;
-          }
-          return true;
-        }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
-
+      // ── Données de l'onglet Structure
+      const filtTravail = useMemo(() => sessions.filter(s => s.type === 'Travail' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo]);
       const structData = useMemo(() => {
-        const parseDur = s => { const p = (s.duration||'0h00').replace('h',':').split(':'); return Number(p[0])+(Number(p[1])||0)/60; };
-        const hGrind   = filtSess.reduce((a,s) => a + parseDur(s), 0);
-        const hTravail = filtTravail.reduce((a,s) => a + parseDur(s), 0);
-        const hExpresso = expressoSessions.filter(s => !cutoff || (s.date||'') >= cutoff)
-          .reduce((a,s) => a + parseDur(s), 0);
-        const total    = hGrind + hTravail + hExpresso;
-        const ratioG   = total > 0 ? Math.round(hGrind/total*100) : 0;
-        const ratioT   = total > 0 ? Math.round(hTravail/total*100) : 0;
-        const ratioE   = total > 0 ? Math.round(hExpresso/total*100) : 0;
-
-        const sumEntries = arr => arr.reduce((a,t) => a + (t.nbEntry||1), 0);
-
-        const MOMENT_COLORS = { Jour:'#38bdf8', Soir:'#818cf8', Live:'#34d399' };
-        const byMomentCount = ['Jour','Soir','Live'].map(m => ({
-          name: m, value: sumEntries(filtered.filter(t => filtSess.find(s=>s.code===t.session && s.typeSession===m))),
-          fill: MOMENT_COLORS[m],
+        const hGrind = filtSess.reduce((a, s) => a + parseDur(s), 0);
+        const hTravail = filtTravail.reduce((a, s) => a + parseDur(s), 0);
+        const hExpresso = expressoSessions.filter(s => !cutoff || (s.date || '') >= cutoff).reduce((a, s) => a + parseDur(s), 0);
+        const total = hGrind + hTravail + hExpresso;
+        const pct = h => total > 0 ? Math.round(h / total * 100) : 0;
+        const sumEntries = arr => arr.reduce((a, t) => a + (t.nbEntry || 1), 0);
+        const MOMENT_COLORS = { Jour: '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
+        const byMomentCount = ['Jour', 'Soir', 'Live'].map(m => ({
+          name: m, value: sumEntries(filtered.filter(t => filtSess.find(s => s.code === t.session && s.typeSession === m))), fill: MOMENT_COLORS[m],
         })).filter(x => x.value > 0);
-
-        const byFormatCount = FORMATS.map(f => ({ name:f, value: sumEntries(filtered.filter(t=>t.format===f)), fill: FMT_CHART[f]||'#6b7280' })).filter(x=>x.value>0);
-        const byFieldCount  = ['0-149','150-499','500-999','1000-2000','2000+'].map(f => ({ name:f, value: sumEntries(filtered.filter(t=>t.field===f)) })).filter(x=>x.value>0);
-        const byBuyinCount  = BUY_INS.map(b => ({ name:`${b}€`, value: sumEntries(filtered.filter(t=>t.buyIn===b)), _b:b })).filter(x=>x.value>0);
-        const byRoomCount   = ROOMS.map(r => ({ name:r, value: sumEntries(filtered.filter(t=>t.room===r)), fill: ROOM_CHART[r]||'#6b7280' })).filter(x=>x.value>0);
-
-        return { hGrind: Math.round(hGrind), hTravail: Math.round(hTravail),
-                 hExpresso: Math.round(hExpresso),
-                 total: Math.round(total), ratioG, ratioT, ratioE,
-                 byMomentCount, byFormatCount, byFieldCount, byBuyinCount, byRoomCount };
+        const byFormatCount = FORMATS.map(f => ({ name: f, value: sumEntries(filtered.filter(t => t.format === f)), fill: FMT_CHART[f] || '#6b7280' })).filter(x => x.value > 0);
+        const byFieldCount  = FIELDS.map(f => ({ name: f, value: sumEntries(filtered.filter(t => t.field === f)) })).filter(x => x.value > 0);
+        const byBuyinCount  = BUY_INS.map(b => ({ name: `${b}€`, value: sumEntries(filtered.filter(t => t.buyIn === b)) })).filter(x => x.value > 0);
+        const byRoomCount   = ROOMS.map(r => ({ name: r, value: sumEntries(filtered.filter(t => t.room === r)), fill: ROOM_CHART[r] || '#6b7280' })).filter(x => x.value > 0);
+        // Volume par semaine (tournois et mains)
+        const wk = {};
+        filtered.forEach(t => { const d = new Date(t.date + 'T12:00:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const k = toStr(d);
+          const o = wk[k] || (wk[k] = { k, n: 0, hands: 0 }); o.n += t.nbEntry || 1; o.hands += t.hands || 0; });
+        const weekly = Object.values(wk).sort((a, b) => a.k.localeCompare(b.k)).map(o => ({ ...o, label: new Date(o.k + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) }));
+        return { hGrind, hTravail, hExpresso, total, ratioG: pct(hGrind), ratioT: pct(hTravail), ratioE: pct(hExpresso),
+          byMomentCount, byFormatCount, byFieldCount, byBuyinCount, byRoomCount, weekly,
+          perSession: filtSess.length ? sumEntries(filtered) / filtSess.length : 0, avgLen: filtSess.length ? hGrind / filtSess.length : 0 };
       }, [filtSess, filtTravail, filtered]);
 
-      const byBuyin = useMemo(() => {
-        const m = {};
-        filtered.forEach(t => { m[t.buyIn] = (m[t.buyIn]||0) + t.profit; });
-        return Object.entries(m).map(([b,profit]) => ({ buyin:`${b}€`, profit, _b: Number(b) })).sort((a,b) => a._b - b._b);
-      }, [filtered]);
-
+      // ── Tableau détaillé
       const sorted = useMemo(() => {
-        return [...filtered].sort((a,b) => {
+        const q = query.trim().toLowerCase();
+        const rows = q ? filtered.filter(t => (t.name || '').toLowerCase().includes(q)) : filtered;
+        return [...rows].sort((a, b) => {
           let va = a[sortCol], vb = b[sortCol];
-          if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
-          return sortDir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
+          if (sortCol === 'date') { va = a.date + (a.startTime || ''); vb = b.date + (b.startTime || ''); }
+          if (va == null) va = typeof vb === 'string' ? '' : -Infinity; if (vb == null) vb = typeof va === 'string' ? '' : -Infinity;
+          if (typeof va === 'string') { va = va.toLowerCase(); vb = String(vb).toLowerCase(); }
+          return sortDir === 'asc' ? (va > vb ? 1 : va < vb ? -1 : 0) : (va < vb ? 1 : va > vb ? -1 : 0);
         });
-      }, [filtered, sortCol, sortDir]);
+      }, [filtered, sortCol, sortDir, query]);
+      const totalPages = Math.max(1, Math.ceil(sorted.length / PER_PAGE));
+      const pageData   = sorted.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+      const sort = col => { if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortCol(col); setSortDir('desc'); } setPage(1); };
 
-      const totalPages = Math.ceil(sorted.length / PER_PAGE);
-      const pageData   = sorted.slice((page-1)*PER_PAGE, page*PER_PAGE);
-
-      const sort = col => {
-        if (sortCol === col) setSortDir(d => d==='asc'?'desc':'asc');
-        else { setSortCol(col); setSortDir('desc'); }
-        setPage(1);
+      // ── Mise en forme
+      const eur = (v, sign = false, dec = null) => {
+        const a = Math.abs(v), d = dec != null ? dec : (a >= 1000 ? 0 : 2);
+        return `${v < 0 ? '−' : sign && v > 0 ? '+' : ''}${a.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d })} €`;
       };
+      const pct = (v, d = 1, sign = true) => `${sign && v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d).replace('.', ',')} %`;
+      const dShort = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : '';
+      const ttStyle = { background: '#0b1220', border: '1px solid #374151', color: '#e5e7eb', borderRadius: 8 };
+      const ttLabelStyle = { color: '#9ca3af', fontWeight: 500 };
+      const ttItemStyle = { color: '#e5e7eb' };
+      const tone = v => v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-gray-400';
 
-      const SortTh = ({ col, children }) => (
-        <th className="px-3 py-2 cursor-pointer select-none hover:text-white whitespace-nowrap text-left"
-          onClick={() => sort(col)}>
-          {children}{sortCol===col ? (sortDir==='asc'?' ↑':' ↓') : ''}
-        </th>
-      );
-
-      const KpiCard = ({ label, value, color='text-white' }) => (
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">{label}</p>
-          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+      const Card = ({ children, cls = '' }) => <div className={`rounded-2xl border border-gray-800 bg-gray-900/60 ${cls}`}>{children}</div>;
+      const Eyebrow = ({ children, cls = 'text-gray-500' }) => <p className={`text-[10.5px] font-semibold uppercase tracking-[0.14em] ${cls}`}>{children}</p>;
+      const Seg = ({ value, onChange, options, accent = 'bg-green-600 text-white' }) => (
+        <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
+          {options.map(([v, l]) => (
+            <button key={v} onClick={() => onChange(v)} className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${value === v ? accent : 'text-gray-400 hover:text-white'}`}>{l}</button>
+          ))}
         </div>
       );
-
-      const ttStyle     = { background:'#1f2937', border:'1px solid #374151', color:'#e5e7eb', borderRadius:'6px' };
-      const ttLabelStyle = { color:'#9ca3af', fontWeight:500 };
-      const ttItemStyle  = { color:'#e5e7eb' };
-
-      const SectionLabel = ({ children }) => (
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{children}</p>
+      const Hero = ({ label, value, color, sub, spark }) => (
+        <Card cls="p-5 flex flex-col gap-1 min-w-0 relative overflow-hidden">
+          <Eyebrow>{label}</Eyebrow>
+          <p className={`text-3xl font-bold tabular-nums tracking-tight ${color}`}>{value}</p>
+          <div className="text-xs text-gray-400 space-y-0.5">{sub}</div>
+          {spark}
+        </Card>
       );
-
+      const Mini = ({ label, value, color = 'text-gray-100' }) => (
+        <div className="px-4 py-3 min-w-0">
+          <p className={`text-lg font-semibold tabular-nums ${color}`}>{value}</p>
+          <p className="text-[11px] text-gray-500">{label}</p>
+        </div>
+      );
+      const SortTh = ({ col, children, right }) => (
+        <th onClick={() => sort(col)} className={`px-3 py-2.5 cursor-pointer select-none hover:text-white whitespace-nowrap font-medium ${right ? 'text-right' : 'text-left'} ${sortCol === col ? 'text-gray-200' : ''}`}>
+          {children}<span className="text-gray-600">{sortCol === col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+        </th>
+      );
       const DonutCard = ({ title, data }) => {
-        const total = data.reduce((a,d) => a+d.value, 0);
+        const total = data.reduce((a, d) => a + d.value, 0);
         return (
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-            <p className="text-sm font-semibold text-gray-300 mb-2">{title}</p>
+          <Card cls="p-4">
+            <p className="text-sm font-semibold text-gray-200 mb-2">{title}</p>
             <div className="relative" style={{ height: 170 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={68} paddingAngle={3} strokeWidth={0}>
+                  <Pie data={data} dataKey="value" nameKey="name" innerRadius={50} outerRadius={72} paddingAngle={data.length > 1 ? 2 : 0} strokeWidth={0}>
                     {data.map(e => <Cell key={e.name} fill={e.fill} />)}
                   </Pie>
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v} (${total ? Math.round(v / total * 100) : 0} %)`, 'Tournois']} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-bold text-white">{total}</span>
+                <span className="text-2xl font-bold text-white tabular-nums">{total.toLocaleString('fr-FR')}</span>
                 <span className="text-[10px] text-gray-500 uppercase tracking-wide">tournois</span>
               </div>
             </div>
-            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-3">
+            <div className="space-y-1.5 mt-3">
               {data.map(e => (
-                <span key={e.name} className="flex items-center gap-1.5 text-xs text-gray-400">
+                <div key={e.name} className="flex items-center gap-2 text-xs">
                   <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: e.fill }} />
-                  {e.name} <span className="text-gray-600">{e.value}</span>
-                </span>
+                  <span className="text-gray-300">{e.name}</span>
+                  <span className="flex-1 border-b border-dotted border-gray-800" />
+                  <span className="text-gray-500 tabular-nums">{e.value}</span>
+                  <span className="text-gray-400 tabular-nums w-11 text-right whitespace-nowrap">{total ? Math.round(e.value / total * 100) : 0} %</span>
+                </div>
               ))}
             </div>
-          </div>
+          </Card>
         );
       };
 
-      return (
-        <div className="p-4 space-y-5">
+      // Sparkline du profit (petite courbe dans la carte Profit)
+      const spark = cumulData.length > 3 && (() => {
+        const W = 160, H = 36, ys = cumulData.map(d => d.profit), lo = Math.min(...ys), hi = Math.max(...ys), n = ys.length - 1;
+        const pts = ys.map((y, i) => `${(i / n) * W},${H - ((y - lo) / ((hi - lo) || 1)) * H}`).join(' ');
+        return <svg viewBox={`0 0 ${W} ${H}`} className="absolute right-4 top-4 w-32 h-8 opacity-70"><polyline points={pts} fill="none" stroke={kpi.profit >= 0 ? '#22c55e' : '#ef4444'} strokeWidth="1.5" /></svg>;
+      })();
 
-          {/* Onglets Dashboard */}
-          <div className="flex gap-1 border-b border-gray-700">
-            {[['tournois','📈 Performance'],['sessions','🔍 Structure']].map(([k,l]) => (
-              <button key={k} onClick={() => setDashTab(k)}
-                className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
-                  ${dashTab===k ? 'border-green-500 text-green-400' : 'border-transparent text-gray-400 hover:text-white'}`}>
-                {l}
+      const activeChips = [
+        ...fRoom.map(v => ({ v, label: v, clear: () => toggle(setFRoom)(v) })),
+        ...fFormat.map(v => ({ v, label: v, clear: () => toggle(setFFormat)(v) })),
+        ...fBuyin.map(v => ({ v, label: `${v} €`, clear: () => toggle(setFBuyin)(v) })),
+        ...fField.map(v => ({ v, label: `field ${v}`, clear: () => toggle(setFField)(v) })),
+      ];
+      const ChipGroup = ({ title, items, sel, onToggle, render, cls }) => (
+        <div>
+          <p className="text-[11px] text-gray-500 mb-1.5">{title}{sel.length > 0 && <span className="text-green-400"> · {sel.length}</span>}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {items.map(it => (
+              <button key={it} onClick={() => onToggle(it)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${sel.includes(it) ? 'border-transparent text-white ' + cls(it) : 'border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200'}`}>
+                {render ? render(it) : it}
               </button>
             ))}
           </div>
+        </div>
+      );
 
-          {/* Filters (communs aux deux onglets) */}
-          <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 space-y-3">
-            <div className="flex flex-wrap gap-4 items-end">
-              <h2 className="text-lg font-bold text-green-400 self-center mr-1">Dashboard</h2>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Période</p>
-                <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
-                  {[['7','7j'],['30','30j'],['all','Tout'],['custom','Plage']].map(([v,l]) => (
-                    <button key={v} onClick={() => { setPeriod(v); setPage(1); }}
-                      className={`px-3 py-1 rounded text-xs font-medium transition-colors
-                        ${period===v ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
-                  ))}
-                </div>
-              </div>
-              {isCustom && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Du</p>
-                  <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }}
-                    className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500" />
-                </div>
-              )}
-              {isCustom && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Au</p>
-                  <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
-                    className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-green-500" />
-                </div>
-              )}
-              {(fRoom.length+fFormat.length+fBuyin.length+fField.length) > 0 && (
-                <button onClick={() => { setFRoom([]); setFFormat([]); setFBuyin([]); setFField([]); setPage(1); }}
-                  className="text-xs text-red-400 hover:text-red-300 border border-red-800 hover:border-red-600 rounded px-2 py-1 transition-colors self-end">
-                  ✕ Réinitialiser
-                </button>
-              )}
-            </div>
+      const periodLabel = { '7': '7 derniers jours', '30': '30 derniers jours', '90': '3 derniers mois', year: 'cette année', all: 'depuis le début', custom: 'plage personnalisée' }[period];
 
-            {/* Filtres multi-sélection */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-              {/* Room */}
-              <div>
-                <p className="text-xs text-gray-500 mb-1.5">Room {fRoom.length > 0 && <span className="text-green-400">({fRoom.length})</span>}</p>
-                <div className="flex flex-wrap gap-1">
-                  {ROOMS.map(r => (
-                    <button key={r} onClick={() => toggle(setFRoom)(r)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
-                        ${fRoom.includes(r)
-                          ? 'border-transparent text-white ' + ROOM_CLS[r]
-                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
-                      {r}
-                    </button>
-                  ))}
-                </div>
-              </div>
+      return (
+        <div className="p-4 space-y-6">
 
-              {/* Format */}
-              <div>
-                <p className="text-xs text-gray-500 mb-1.5">Format {fFormat.length > 0 && <span className="text-green-400">({fFormat.length})</span>}</p>
-                <div className="flex flex-wrap gap-1">
-                  {FORMATS.map(f => (
-                    <button key={f} onClick={() => toggle(setFFormat)(f)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
-                        ${fFormat.includes(f)
-                          ? 'border-transparent text-white ' + FMT_CLS[f]
-                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Buy-In */}
-              <div>
-                <p className="text-xs text-gray-500 mb-1.5">Buy-In {fBuyin.length > 0 && <span className="text-green-400">({fBuyin.length})</span>}</p>
-                <div className="flex flex-wrap gap-1">
-                  {BUY_INS.map(b => (
-                    <button key={b} onClick={() => toggle(setFBuyin)(b)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
-                        ${fBuyin.includes(b)
-                          ? 'bg-indigo-600 border-indigo-500 text-white'
-                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
-                      {b}€
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Field */}
-              <div>
-                <p className="text-xs text-gray-500 mb-1.5">Field {fField.length > 0 && <span className="text-green-400">({fField.length})</span>}</p>
-                <div className="flex flex-wrap gap-1">
-                  {FIELDS.map(f => (
-                    <button key={f} onClick={() => toggle(setFField)(f)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
-                        ${fField.includes(f)
-                          ? 'bg-cyan-700 border-cyan-600 text-white'
-                          : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'}`}>
-                      {f}
-                    </button>
-                  ))}
-                </div>
+          {/* ── En-tête : titre, onglets, période */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="mr-auto">
+              <Eyebrow cls="text-green-500/80">Dashboard · {periodLabel}</Eyebrow>
+              <div className="flex items-center gap-4 mt-1">
+                <h2 className="text-2xl font-bold text-white tracking-tight">{dashTab === 'tournois' ? 'Performance' : 'Structure'}</h2>
+                <Seg value={dashTab} onChange={setDashTab} options={[['tournois', 'Performance'], ['sessions', 'Structure']]} accent="bg-gray-700 text-white" />
               </div>
             </div>
+            <Seg value={period} onChange={v => { setPeriod(v); setPage(1); }} options={[['7', '7 j'], ['30', '30 j'], ['90', '3 mois'], ['year', 'Année'], ['all', 'Tout'], ['custom', 'Plage']]} />
+            <button onClick={() => setShowFilters(s => !s)}
+              className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${showFilters || activeChips.length ? 'border-green-700 text-green-300 bg-green-900/20' : 'border-gray-800 text-gray-400 hover:text-white bg-gray-900'}`}>
+              Filtres{activeChips.length ? ` · ${activeChips.length}` : ''} {showFilters ? '▴' : '▾'}
+            </button>
           </div>
 
-          {/* KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-5 lg:grid-cols-9 gap-3">
-            <KpiCard label="Sessions Grind"  value={kpi.grind} />
-            <KpiCard label="Total Heures"    value={`${kpi.hours}h`} />
-            <KpiCard label="Tournois / Re-Entry" value={`${kpi.total} / ${kpi.reEntries}`} color="text-orange-400" />
-            <KpiCard label="ABI" value={`${kpi.abi.toFixed(2)}€`} color="text-cyan-400" />
-            <KpiCard label="ROI" value={`${kpi.roi}%`} color={Number(kpi.roi)>=0?'text-green-400':'text-red-400'} />
-            <KpiCard label="Profit Net" value={`${kpi.profit>=0?'+':''}${kpi.profit.toFixed(2)}€`} color={kpi.profit>=0?'text-green-400':'text-red-400'} />
-            <KpiCard label="ITM Rate" value={`${kpi.itmR}%`} color="text-yellow-400" />
-            <KpiCard label="bb/100" value={kpi.bb ? fmtBB(kpi.bb.won) : '—'} color={kpi.bb && kpi.bb.won >= 0 ? 'text-green-400' : 'text-red-400'} />
-            <KpiCard label="bb/100 EV" value={kpi.bb ? fmtBB(kpi.bb.ev) : '—'} color={kpi.bb && kpi.bb.ev >= 0 ? 'text-yellow-300' : 'text-orange-400'} />
-          </div>
-          {kpi.bb && <BBDetail bb={kpi.bb} />}
-
-          {/* ══════════ ONGLET TOURNOIS ══════════ */}
-          {dashTab === 'tournois' && (<>
-
-          <SectionLabel>📈 Évolution</SectionLabel>
-
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-            <p className="text-sm font-semibold text-gray-300 mb-3">Profit Cumulé</p>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={cumulData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis dataKey="date" tick={{ fill:'#9ca3af', fontSize:10 }} />
-                <YAxis tick={{ fill:'#9ca3af', fontSize:10 }} />
-                <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} />
-                <Line type="monotone" dataKey="profit" stroke="#22c55e" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {bbCurve.length > 2 && (
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Gains cumulés en big blinds</p>
-              <BBChart data={bbCurve} height={240} />
+          {isCustom && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400 -mt-3">
+              Du <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }} className="bg-gray-900 border border-gray-700 rounded-md px-2 py-1.5 text-sm text-white focus:outline-none focus:border-green-500" />
+              au <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }} className="bg-gray-900 border border-gray-700 rounded-md px-2 py-1.5 text-sm text-white focus:outline-none focus:border-green-500" />
             </div>
           )}
 
-          <SectionLabel>💰 Profit par catégorie</SectionLabel>
+          {showFilters && (
+            <Card cls="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 -mt-2">
+              <ChipGroup title="Room" items={ROOMS} sel={fRoom} onToggle={toggle(setFRoom)} cls={r => ROOM_CLS[r]} />
+              <ChipGroup title="Format" items={FORMATS} sel={fFormat} onToggle={toggle(setFFormat)} cls={f => FMT_CLS[f]} />
+              <ChipGroup title="Buy-in" items={BUY_INS} sel={fBuyin} onToggle={toggle(setFBuyin)} render={b => `${b} €`} cls={() => 'bg-indigo-600'} />
+              <ChipGroup title="Field" items={FIELDS} sel={fField} onToggle={toggle(setFField)} cls={() => 'bg-cyan-700'} />
+            </Card>
+          )}
+          {!showFilters && activeChips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 -mt-3">
+              {activeChips.map(c => (
+                <button key={c.label} onClick={c.clear} className="group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-gray-800 border border-gray-700 text-gray-200 hover:border-red-700">
+                  {c.label}<span className="text-gray-500 group-hover:text-red-400">✕</span>
+                </button>
+              ))}
+              <button onClick={() => { setFRoom([]); setFFormat([]); setFBuyin([]); setFField([]); setPage(1); }} className="text-xs text-gray-500 hover:text-red-400 ml-1">tout effacer</button>
+            </div>
+          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Par Room</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={byRoom}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="room" tick={{ fill:'#9ca3af', fontSize:11 }} />
-                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
-                  <Bar dataKey="profit" radius={[4,4,0,0]}>
-                    {byRoom.map(e => <Cell key={e.room} fill={ROOM_CHART[e.room]||'#6b7280'} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Par Format</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={byFormat}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="format" tick={{ fill:'#9ca3af', fontSize:11 }} />
-                  <YAxis tick={{ fill:'#9ca3af', fontSize:11 }} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
-                  <Bar dataKey="profit" radius={[4,4,0,0]}>
-                    {byFormat.map(e => <Cell key={e.format} fill={FMT_CHART[e.format]||'#6b7280'} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Par Field</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={byField} layout="vertical" barSize={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
-                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} />
-                  <YAxis type="category" dataKey="field" tick={{ fill:'#9ca3af', fontSize:10 }} width={64} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
-                  <Bar dataKey="profit" radius={[0,4,4,0]}>
-                    {byField.map(e => <Cell key={e.field} fill={e.profit>=0?'#06b6d4':'#f97316'} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Par Buy-In</p>
-              <ResponsiveContainer width="100%" height={Math.max(180, byBuyin.length * 32)}>
-                <BarChart data={byBuyin} layout="vertical" barSize={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
-                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} />
-                  <YAxis type="category" dataKey="buyin" tick={{ fill:'#9ca3af', fontSize:11 }} width={36} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [`${v.toFixed(2)}€`, 'Profit']} cursor={{ fill:'#37415130' }} />
-                  <Bar dataKey="profit" radius={[0,4,4,0]}>
-                    {byBuyin.map(e => <Cell key={e.buyin} fill={e.profit>=0?'#22c55e':'#ef4444'} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+          {/* ══════════ PERFORMANCE ══════════ */}
+          {dashTab === 'tournois' && (<>
+
+          {/* Indicateurs principaux */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            <Hero label="Profit net" value={eur(kpi.profit, true)} color={tone(kpi.profit)} spark={spark}
+              sub={<><p>{eur(kpi.gains)} gagnés pour {eur(kpi.invest)} investis</p>{kpi.bounty > 0 && <p className="text-purple-300/80">dont {eur(kpi.bounty)} de bounties</p>}</>} />
+            <Hero label="ROI" value={pct(kpi.roi)} color={tone(kpi.roi)}
+              sub={<><p>ABI {eur(kpi.abi, false, 2)} · {kpi.totalEntries.toLocaleString('fr-FR')} entrées</p><p>{kpi.total.toLocaleString('fr-FR')} tournois dont {kpi.reEntries} re-entries</p></>} />
+            <Hero label="bb/100 EV" value={kpi.bb ? fmtBB(kpi.bb.ev) : '—'} color={kpi.bb && kpi.bb.ev >= 0 ? 'text-yellow-300' : 'text-orange-400'}
+              sub={kpi.bb ? <><p>réel <span className={tone(kpi.bb.won)}>{fmtBB(kpi.bb.won)}</span> · écart <span className={tone(kpi.bb.luck)}>{fmtBB(kpi.bb.luck)}</span></p><p>sur {kpi.bb.hands.toLocaleString('fr-FR')} mains</p></> : <p>aucune main importée sur la période</p>} />
+            <Hero label="ITM" value={pct(kpi.itmR, 1, false)} color="text-sky-300"
+              sub={<><p>{kpi.itm} places payées sur {kpi.totalEntries.toLocaleString('fr-FR')} entrées</p><p>{kpi.grind} sessions · {Math.round(kpi.hours)} h de jeu</p></>} />
           </div>
 
-          <SectionLabel>📋 Détail</SectionLabel>
+          {/* Indicateurs secondaires */}
+          <Card cls="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 divide-x divide-gray-800 overflow-hidden">
+            <Mini label="Gain horaire" value={kpi.perHour != null ? `${eur(kpi.perHour, true, 2)} / h` : '—'} color={kpi.perHour != null ? tone(kpi.perHour) : 'text-gray-500'} />
+            <Mini label="Profit par tournoi" value={kpi.total ? eur(kpi.profit / kpi.total, true, 2) : '—'} color={tone(kpi.profit)} />
+            <Mini label="Mains jouées" value={kpi.hands.toLocaleString('fr-FR')} />
+            <Mini label="Showdown (bb/100)" value={kpi.bb ? fmtBB(kpi.bb.sd) : '—'} color={kpi.bb ? (kpi.bb.sd >= 0 ? 'text-blue-300' : 'text-red-400') : 'text-gray-500'} />
+            <Mini label="Sans showdown (bb/100)" value={kpi.bb ? fmtBB(kpi.bb.nsd) : '—'} color={kpi.bb ? tone(kpi.bb.nsd) : 'text-gray-500'} />
+            <Mini label="Durée moyenne de session" value={kpi.grind ? `${Math.floor(kpi.hours / kpi.grind)}h${String(Math.round((kpi.hours / kpi.grind % 1) * 60)).padStart(2, '0')}` : '—'} />
+          </Card>
 
-          {/* Table détail tournois */}
-          <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
-            <p className="text-sm font-semibold text-gray-300 px-4 py-3 border-b border-gray-700">
-              Détail — {filtered.length} tournois
-            </p>
+          {/* Évolution */}
+          <Card cls="p-4">
+            <div className="flex flex-wrap items-center gap-3 mb-3">
+              <p className="text-sm font-semibold text-gray-200 mr-auto">Évolution {curveMode === 'eur' ? 'du profit' : 'en big blinds'}</p>
+              <Seg value={curveMode} onChange={setCurveMode} options={[['eur', 'En euros'], ['bb', 'En big blinds']]} accent="bg-gray-700 text-white" />
+            </div>
+            {curveMode === 'eur' ? (
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={cumulData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                  <defs><linearGradient id="dashFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22c55e" stopOpacity={0.25} /><stop offset="100%" stopColor="#22c55e" stopOpacity={0} /></linearGradient></defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="i" type="number" domain={[0, 'dataMax']} tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => v ? v : ''} />
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${Math.round(v)}€`} width={56} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle}
+                    labelFormatter={(v, p) => { const r = p && p[0] && p[0].payload; return r && r.date ? `Tournoi ${v} · ${dShort(r.date)} · ${r.name}` : `Tournoi ${v}`; }}
+                    formatter={v => [eur(v, true), 'Profit cumulé']} />
+                  <Area type="monotone" dataKey="profit" stroke="#22c55e" strokeWidth={2} fill="url(#dashFill)" isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : bbCurve.length > 2 ? <BBChart data={bbCurve} height={260} /> : <p className="text-sm text-gray-500 py-10 text-center">Pas de mains importées sur la période.</p>}
+            <p className="text-[11px] text-gray-500 mt-1">Axe horizontal : {curveMode === 'eur' ? 'tournois joués, dans l\'ordre' : 'mains jouées'}.</p>
+          </Card>
+
+          {/* Répartition */}
+          <Card cls="overflow-hidden">
+            <div className="flex flex-wrap items-center gap-3 px-4 pt-4 pb-3">
+              <p className="text-sm font-semibold text-gray-200 mr-auto">Où tu gagnes, où tu perds</p>
+              <Seg value={segBy} onChange={setSegBy} options={[['format', 'Format'], ['room', 'Room'], ['buyIn', 'Buy-in'], ['field', 'Field']]} accent="bg-gray-700 text-white" />
+            </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm" style={{ minWidth:'780px' }}>
-                <thead className="bg-gray-900 text-gray-400 text-xs uppercase">
+              <table className="w-full text-sm whitespace-nowrap" style={{ minWidth: 760 }}>
+                <thead className="text-[11px] uppercase tracking-wide text-gray-500 border-y border-gray-800 bg-gray-900/60">
+                  <tr><th className="px-4 py-2 text-left font-medium">Segment</th><th className="px-3 py-2 text-right font-medium">Tournois</th><th className="px-3 py-2 text-right font-medium">Investi</th>
+                    <th className="px-3 py-2 text-left font-medium" style={{ width: '28%' }}>Profit</th><th className="px-3 py-2 text-right font-medium">ROI</th><th className="px-3 py-2 text-right font-medium">ITM</th><th className="px-4 py-2 text-right font-medium">bb/100 EV</th></tr>
+                </thead>
+                <tbody>
+                  {segRows.map(r => {
+                    const w = Math.abs(r.profit) / segMax * 50;
+                    const label = segBy === 'buyIn' ? `${r.k} €` : r.k;
+                    const dot = segBy === 'room' ? ROOM_CHART[r.k] : segBy === 'format' ? FMT_CHART[r.k] : null;
+                    return (
+                      <tr key={String(r.k)} className="border-t border-gray-800/80 hover:bg-gray-800/30">
+                        <td className="px-4 py-2.5 text-gray-100 font-medium"><span className="inline-flex items-center gap-2">{dot && <span className="w-2 h-2 rounded-full" style={{ background: dot }} />}{label}</span></td>
+                        <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums">{r.n.toLocaleString('fr-FR')}</td>
+                        <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums">{eur(r.inv, false, 0)}</td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div className="relative h-2 flex-1 rounded-full bg-gray-800/60">
+                              <div className="absolute top-0 bottom-0 w-px bg-gray-600" style={{ left: '50%' }} />
+                              <div className={`absolute top-0 bottom-0 rounded-full ${r.profit >= 0 ? 'bg-green-500/80' : 'bg-red-500/80'}`}
+                                style={r.profit >= 0 ? { left: '50%', width: `${w}%` } : { right: '50%', width: `${w}%` }} />
+                            </div>
+                            <span className={`w-24 text-right tabular-nums font-semibold ${tone(r.profit)}`}>{eur(r.profit, true, 0)}</span>
+                          </div>
+                        </td>
+                        <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${r.roi == null ? 'text-gray-500' : tone(r.roi)}`}>{r.roi == null ? '—' : pct(r.roi * 100)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-gray-300">{pct(r.itmR * 100, 1, false)}</td>
+                        <td className={`px-4 py-2.5 text-right tabular-nums ${r.bb ? (r.bb.ev >= 0 ? 'text-yellow-300' : 'text-orange-400') : 'text-gray-600'}`}>{r.bb ? fmtBB(r.bb.ev) : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-gray-500 px-4 py-2.5 border-t border-gray-800">Avec moins d'une centaine de tournois, le ROI d'un segment dépend surtout de quelques gros scores : l'onglet Analyse dit si un écart est significatif.</p>
+          </Card>
+
+          {/* Détail */}
+          <Card cls="overflow-hidden">
+            <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+              <p className="text-sm font-semibold text-gray-200 mr-auto">Tous les tournois <span className="text-gray-500 font-normal">· {sorted.length.toLocaleString('fr-FR')}</span></p>
+              <input value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} placeholder="Rechercher un tournoi…"
+                className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-600 w-56 focus:outline-none focus:border-green-600" />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm whitespace-nowrap" style={{ minWidth: 960 }}>
+                <thead className="text-[11px] uppercase tracking-wide text-gray-500 border-y border-gray-800 bg-gray-900/60">
                   <tr>
-                    <SortTh col="date">Date</SortTh>
-                    <SortTh col="session">Session</SortTh>
-                    <SortTh col="room">Room</SortTh>
-                    <SortTh col="buyIn">Buy-In</SortTh>
-                    <SortTh col="format">Format</SortTh>
-                    <SortTh col="field">Field</SortTh>
-                    <SortTh col="itm">ITM</SortTh>
-                    <SortTh col="gains">Gains</SortTh>
-                    <SortTh col="profit">Profit</SortTh>
+                    <SortTh col="date">Date</SortTh><SortTh col="name">Tournoi</SortTh><SortTh col="room">Room</SortTh>
+                    <SortTh col="buyIn" right>Buy-in</SortTh><SortTh col="format">Format</SortTh><SortTh col="players" right>Field</SortTh>
+                    <SortTh col="place" right>Place</SortTh><SortTh col="bbEV" right>bb EV</SortTh><SortTh col="gains" right>Gains</SortTh><SortTh col="profit" right>Profit</SortTh>
                   </tr>
                 </thead>
                 <tbody>
                   {pageData.map((t, idx) => (
-                    <tr key={`${t.id}-${idx}`} className={`border-t border-gray-700 hover:bg-gray-700/30
-                      ${t.profit>0?'bg-green-950/30':t.profit<0?'bg-red-950/20':''}`}>
-                      <td className="px-3 py-2 text-gray-400 text-xs">{t.date}</td>
-                      <td className="px-3 py-2 font-mono text-green-400">{t.session}</td>
-                      <td className="px-3 py-2"><Badge cls={ROOM_CLS[t.room]}>{t.room}</Badge></td>
-                      <td className="px-3 py-2 text-gray-300">{t.buyIn}€</td>
+                    <tr key={`${t.id}-${idx}`} className="border-t border-gray-800/80 hover:bg-gray-800/30">
+                      <td className="px-3 py-2 text-gray-500 text-xs tabular-nums">{dShort(t.date)} <span className="text-gray-600">{t.startTime || ''}</span></td>
+                      <td className="px-3 py-2 text-gray-100 max-w-[260px] truncate" title={t.name}>{t.name || '—'}</td>
+                      <td className="px-3 py-2"><span className="inline-flex items-center gap-1.5 text-xs text-gray-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: ROOM_CHART[t.room] || '#6b7280' }} />{t.room}</span></td>
+                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">{t.buyIn} €{t.nbEntry > 1 && <span className="text-orange-400 text-xs"> ×{t.nbEntry}</span>}</td>
                       <td className="px-3 py-2"><Badge cls={FMT_CLS[t.format]}>{t.format}</Badge></td>
-                      <td className="px-3 py-2 text-gray-400 text-xs">{t.field}</td>
-                      <td className="px-3 py-2 text-center">{t.itm ? <span className="text-green-400 font-bold">✓</span> : <span className="text-gray-700">—</span>}</td>
-                      <td className="px-3 py-2 text-gray-300">{t.gains>0?`${t.gains}€`:'—'}</td>
-                      <td className={`px-3 py-2 font-bold ${t.profit>0?'text-green-400':t.profit<0?'text-red-400':'text-gray-500'}`}>
-                        {t.profit>0?'+':''}{t.profit.toFixed(2)}€
-                      </td>
+                      <td className="px-3 py-2 text-right text-gray-500 tabular-nums">{t.players ? `${t.players.toLocaleString('fr-FR')}${t.playersEst ? '~' : ''}` : t.field || '—'}</td>
+                      <td className={`px-3 py-2 text-right tabular-nums ${t.itm ? 'text-green-400 font-semibold' : 'text-gray-400'}`}>{t.place || '—'}</td>
+                      <td className={`px-3 py-2 text-right tabular-nums text-xs ${t.bbHands ? (t.bbEV >= 0 ? 'text-yellow-300/80' : 'text-orange-400/80') : 'text-gray-700'}`}>{t.bbHands ? `${t.bbEV >= 0 ? '+' : ''}${Math.round(t.bbEV)}` : '—'}</td>
+                      <td className="px-3 py-2 text-right text-gray-300 tabular-nums">{t.gains > 0 ? eur(t.gains) : '—'}</td>
+                      <td className={`px-3 py-2 text-right font-semibold tabular-nums ${tone(t.profit)}`}>{eur(t.profit, true)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
             {totalPages > 1 && (
-              <div className="flex gap-2 items-center justify-center py-3 border-t border-gray-700">
-                <Btn onClick={() => setPage(p => Math.max(1,p-1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===1}>←</Btn>
-                <span className="text-xs text-gray-400">{page} / {totalPages}</span>
-                <Btn onClick={() => setPage(p => Math.min(totalPages,p+1))} cls="bg-gray-700 hover:bg-gray-600 text-white" disabled={page===totalPages}>→</Btn>
+              <div className="flex gap-3 items-center justify-center py-3 border-t border-gray-800">
+                <button onClick={() => setPage(1)} disabled={page === 1} className="px-2 py-1 text-xs text-gray-400 disabled:opacity-30 hover:text-white">«</button>
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1 rounded-md bg-gray-800 text-gray-200 text-xs disabled:opacity-30">Précédent</button>
+                <span className="text-xs text-gray-400 tabular-nums">page {page} / {totalPages}</span>
+                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 py-1 rounded-md bg-gray-800 text-gray-200 text-xs disabled:opacity-30">Suivant</button>
+                <button onClick={() => setPage(totalPages)} disabled={page === totalPages} className="px-2 py-1 text-xs text-gray-400 disabled:opacity-30 hover:text-white">»</button>
               </div>
             )}
-          </div>
+          </Card>
           </>)}
 
-          {/* ══════════ ONGLET STRUCTURE ══════════ */}
+          {/* ══════════ STRUCTURE ══════════ */}
           {dashTab === 'sessions' && (<>
-
-          <SectionLabel>⏱ Répartition du temps</SectionLabel>
-
-          {/* Ratio Grind / Travail / Expresso */}
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-5">
-            <div className="flex items-center gap-4 mb-4 flex-wrap">
-              <div className="text-center min-w-16">
-                <p className="text-3xl font-bold text-green-400">{structData.hGrind}h</p>
-                <p className="text-xs text-gray-500 mt-1">🎮 Grind</p>
-                <p className="text-xs text-green-500 font-semibold">{structData.ratioG}%</p>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <Card cls="lg:col-span-2 p-5">
+              <Eyebrow>Répartition du temps · {Math.round(structData.total)} h sur la période</Eyebrow>
+              <div className="flex h-3 rounded-full overflow-hidden bg-gray-800 mt-4">
+                {structData.ratioG > 0 && <div className="bg-green-500" style={{ width: `${structData.ratioG}%` }} />}
+                {structData.ratioT > 0 && <div className="bg-blue-500" style={{ width: `${structData.ratioT}%` }} />}
+                {structData.ratioE > 0 && <div className="bg-cyan-400" style={{ width: `${structData.ratioE}%` }} />}
               </div>
-              <div className="flex-1 min-w-32">
-                <div className="flex h-6 rounded-full overflow-hidden bg-gray-900 ring-1 ring-gray-700">
-                  {structData.ratioG > 0 && (
-                    <div className="bg-gradient-to-r from-green-600 to-green-400 flex items-center justify-center text-xs font-bold text-white transition-all"
-                      style={{ width:`${structData.ratioG}%` }}>
-                      {structData.ratioG >= 15 ? `${structData.ratioG}%` : ''}
-                    </div>
-                  )}
-                  {structData.ratioT > 0 && (
-                    <div className="bg-gradient-to-r from-blue-500 to-blue-400 flex items-center justify-center text-xs font-bold text-white transition-all"
-                      style={{ width:`${structData.ratioT}%` }}>
-                      {structData.ratioT >= 15 ? `${structData.ratioT}%` : ''}
-                    </div>
-                  )}
-                  {structData.ratioE > 0 && (
-                    <div className="bg-gradient-to-r from-cyan-500 to-cyan-400 flex items-center justify-center text-xs font-bold text-white transition-all"
-                      style={{ width:`${structData.ratioE}%` }}>
-                      {structData.ratioE >= 15 ? `${structData.ratioE}%` : ''}
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-gray-600 text-center mt-2">Total : {structData.total}h sur la période</p>
+              <div className="grid grid-cols-3 gap-3 mt-4">
+                {[['Grind', structData.hGrind, structData.ratioG, 'bg-green-500', 'text-green-400'], ['Travail', structData.hTravail, structData.ratioT, 'bg-blue-500', 'text-blue-400'], ['Expresso', structData.hExpresso, structData.ratioE, 'bg-cyan-400', 'text-cyan-300']]
+                  .filter(x => x[0] !== 'Expresso' || x[1] > 0).map(([l, h, r, dot, c]) => (
+                  <div key={l}>
+                    <p className="flex items-center gap-1.5 text-xs text-gray-400"><span className={`w-2 h-2 rounded-full ${dot}`} />{l}</p>
+                    <p className={`text-2xl font-bold tabular-nums ${c}`}>{Math.round(h)} h</p>
+                    <p className="text-xs text-gray-500">{r} % du temps</p>
+                  </div>
+                ))}
               </div>
-              <div className="text-center min-w-16">
-                <p className="text-3xl font-bold text-blue-400">{structData.hTravail}h</p>
-                <p className="text-xs text-gray-500 mt-1">💼 Travail</p>
-                <p className="text-xs text-blue-400 font-semibold">{structData.ratioT}%</p>
-              </div>
-              {structData.hExpresso > 0 && (
-                <div className="text-center min-w-16">
-                  <p className="text-3xl font-bold text-cyan-400">{structData.hExpresso}h</p>
-                  <p className="text-xs text-gray-500 mt-1">⚡ Expresso</p>
-                  <p className="text-xs text-cyan-400 font-semibold">{structData.ratioE}%</p>
-                </div>
-              )}
-            </div>
+            </Card>
+            <Card cls="p-5 grid grid-cols-2 gap-4 content-start">
+              <div><Eyebrow>Sessions</Eyebrow><p className="text-2xl font-bold text-white tabular-nums mt-1">{filtSess.length}</p></div>
+              <div><Eyebrow>Durée moyenne</Eyebrow><p className="text-2xl font-bold text-white tabular-nums mt-1">{`${Math.floor(structData.avgLen)}h${String(Math.round((structData.avgLen % 1) * 60)).padStart(2, '0')}`}</p></div>
+              <div><Eyebrow>Tournois / session</Eyebrow><p className="text-2xl font-bold text-white tabular-nums mt-1">{structData.perSession.toFixed(1).replace('.', ',')}</p></div>
+              <div><Eyebrow>Mains / session</Eyebrow><p className="text-2xl font-bold text-white tabular-nums mt-1">{filtSess.length ? Math.round(kpi.hands / filtSess.length).toLocaleString('fr-FR') : '—'}</p></div>
+            </Card>
           </div>
 
-          <SectionLabel>🎯 Répartition des tournois</SectionLabel>
+          {structData.weekly.length > 1 && (
+            <Card cls="p-4">
+              <p className="text-sm font-semibold text-gray-200 mb-3">Volume par semaine</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={structData.weekly} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} allowDecimals={false} width={36} />
+                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} cursor={{ fill: '#37415130' }}
+                    labelFormatter={v => `Semaine du ${v}`} formatter={(v, k, p) => [`${v} tournois · ${p.payload.hands.toLocaleString('fr-FR')} mains`, 'Volume']} />
+                  <Bar dataKey="n" fill="#38bdf8" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
 
-          {/* Tournois par Room + Format + Type de session */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <DonutCard title="Par Room" data={structData.byRoomCount} />
-            <DonutCard title="Par Format" data={structData.byFormatCount} />
-            <DonutCard title="Par Type de Session" data={structData.byMomentCount} />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <DonutCard title="Par room" data={structData.byRoomCount} />
+            <DonutCard title="Par format" data={structData.byFormatCount} />
+            <DonutCard title="Par moment de la journée" data={structData.byMomentCount} />
           </div>
 
-          {/* Tournois par Field + par Buy-In */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Par Field</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={structData.byFieldCount} layout="vertical" barSize={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
-                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} allowDecimals={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fill:'#9ca3af', fontSize:10 }} width={68} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} cursor={{ fill:'#37415130' }} />
-                  <Bar dataKey="value" fill="#a78bfa" radius={[0,4,4,0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <p className="text-sm font-semibold text-gray-300 mb-3">Par Buy-In</p>
-              <ResponsiveContainer width="100%" height={Math.max(180, structData.byBuyinCount.length * 32)}>
-                <BarChart data={structData.byBuyinCount} layout="vertical" barSize={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
-                  <XAxis type="number" tick={{ fill:'#9ca3af', fontSize:10 }} allowDecimals={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fill:'#9ca3af', fontSize:11 }} width={36} />
-                  <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} cursor={{ fill:'#37415130' }} />
-                  <Bar dataKey="value" fill="#38bdf8" radius={[0,4,4,0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {[['Par field', structData.byFieldCount, '#a78bfa', 68], ['Par buy-in', structData.byBuyinCount, '#38bdf8', 40]].map(([title, data, color, w]) => (
+              <Card key={title} cls="p-4">
+                <p className="text-sm font-semibold text-gray-200 mb-3">{title}</p>
+                <ResponsiveContainer width="100%" height={Math.max(180, data.length * 30)}>
+                  <BarChart data={data} layout="vertical" barSize={16}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
+                    <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} allowDecimals={false} />
+                    <YAxis type="category" dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} width={w} />
+                    <Tooltip contentStyle={ttStyle} labelStyle={ttLabelStyle} itemStyle={ttItemStyle} formatter={v => [v, 'Tournois']} cursor={{ fill: '#37415130' }} />
+                    <Bar dataKey="value" fill={color} radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+            ))}
           </div>
           </>)}
-
         </div>
       );
     }
