@@ -3467,6 +3467,83 @@
       return rows;
     }
 
+    // Re-entries : on découpe chaque tournoi en bullets. Seule la dernière bullet peut cash (les précédentes ont busté) ;
+    // les bounties, dont on ne sait pas quelle bullet les a gagnés, sont répartis à parts égales.
+    function anBullets(tourns) {
+      const first = [], re = [];
+      tourns.filter(t => !/add-on/.test(t.notes || '')).forEach(t => {
+        const k = Math.max(1, t.nbEntry | 0);
+        for (let j = 1; j <= k; j++) {
+          const gain = (t.bounty || 0) / k + (j === k ? (t.prize || 0) : 0);
+          (j === 1 ? first : re).push({ inv: t.buyIn, prof: gain - t.buyIn, itm: j === k && !!t.itm, room: t.room, format: t.format });
+        }
+      });
+      return { first, re };
+    }
+    function anCompare(a, b, seed) {
+      const rnd = anRng(seed);
+      const sum = x => { const inv = x.reduce((s, i) => s + i.inv, 0); return inv ? x.reduce((s, i) => s + i.prof, 0) / inv : 0; };
+      const out = { roiA: sum(a), roiB: sum(b), nA: a.length, nB: b.length,
+        itmA: a.length ? a.filter(x => x.itm).length / a.length : 0, itmB: b.length ? b.filter(x => x.itm).length / b.length : 0 };
+      if (a.length >= AN_MIN_N && b.length >= AN_MIN_N) {
+        const ba = anBootRoi(a, rnd), bb = anBootRoi(b, rnd);
+        out.ciA = [anQuant(ba, 0.025), anQuant(ba, 0.975)]; out.ciB = [anQuant(bb, 0.025), anQuant(bb, 0.975)];
+        let le = 0, ge = 0; for (let i = 0; i < AN_B; i++) { const d = ba[i] - bb[i]; if (d <= 0) le++; if (d >= 0) ge++; }
+        out.p = Math.min(1, 2 * Math.min(le, ge) / AN_B);
+        out.pZero = Math.min(1, 2 * Math.min(Array.from(bb).filter(v => v <= 0).length, Array.from(bb).filter(v => v >= 0).length) / AN_B);
+      }
+      return out;
+    }
+
+    function ReentryCard({ tourns }) {
+      const data = useMemo(() => {
+        const { first, re } = anBullets(tourns);
+        const all = anCompare(first, re, 11);
+        const by = (key) => [...new Set(first.map(x => x[key]))].map(v => ({ v, ...anCompare(first.filter(x => x[key] === v), re.filter(x => x[key] === v), 13) }))
+          .filter(r => r.nB > 0).sort((a, b) => b.nB - a.nB);
+        return { all, rooms: by('room'), formats: by('format'), nT: tourns.filter(t => !/add-on/.test(t.notes || '')).length, nRe: tourns.filter(t => t.nbEntry > 1 && !/add-on/.test(t.notes || '')).length };
+      }, [tourns]);
+      const pct = x => `${x > 0 ? '+' : ''}${(x * 100).toFixed(1)} %`;
+      const { all } = data;
+      let msg;
+      if (all.p == null) msg = <>Pas encore assez de re-entries pour conclure (il en faut au moins {AN_MIN_N}).</>;
+      else if (all.p < 0.05) msg = all.roiB < all.roiA ? <>Tes re-entries sont <b>significativement moins rentables</b> que tes 1res bullets.</> : <>Tes re-entries sont <b>significativement plus rentables</b> que tes 1res bullets.</>;
+      else msg = <>La différence entre 1re bullet et re-entry n'est <b>pas significative</b> : avec ce volume, elle peut venir du hasard.</>;
+      const zero = all.pZero == null ? null : all.pZero < 0.05 ? (all.roiB > 0 ? ' Tes re-entries sont significativement rentables (ROI > 0).' : ' Tes re-entries perdent significativement de l\'argent.') : ` On ne peut pas encore dire si tes re-entries gagnent ou perdent de l'argent (l'intervalle contient 0).`;
+      const Table = ({ rows, label }) => (
+        <table className="w-full text-xs">
+          <thead className="text-gray-500"><tr><th className="text-left py-1">{label}</th><th className="text-right">1res bullets</th><th className="text-right">ROI</th><th className="text-right">Re-entries</th><th className="text-right">ROI</th></tr></thead>
+          <tbody>{rows.map(r => (
+            <tr key={r.v} className="border-t border-gray-700">
+              <td className="py-1 text-gray-300">{r.v}</td>
+              <td className="text-right text-gray-500">{r.nA}</td><td className={`text-right ${r.roiA >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(r.roiA)}</td>
+              <td className="text-right text-gray-500">{r.nB}</td><td className={`text-right ${r.roiB >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(r.roiB)}{r.nB < AN_MIN_N && <span className="text-gray-600"> *</span>}</td>
+            </tr>))}</tbody>
+        </table>
+      );
+      return (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
+          <h3 className="font-semibold text-indigo-200">🔁 Re-entries : la 2e bullet est-elle rentable ?</h3>
+          <p className="text-xs text-gray-400">{data.nRe} tournois avec re-entry sur {data.nT}. Chaque tournoi est découpé en bullets : seule la dernière peut cash, les bounties sont répartis à parts égales entre les bullets.</p>
+          <div className="grid md:grid-cols-2 gap-3">
+            {[['1re bullet', all.roiA, all.ciA, all.nA, all.itmA], ['Re-entries (2e bullet et +)', all.roiB, all.ciB, all.nB, all.itmB]].map(([l, roi, ci, n, itm]) => (
+              <div key={l} className="bg-gray-900/50 rounded p-3">
+                <p className="text-xs text-gray-500">{l} · {n} bullets</p>
+                <p className={`text-2xl font-bold ${roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(roi)}</p>
+                <p className="text-[11px] text-gray-500">{ci ? `Intervalle à 95 % : ${pct(ci[0])} à ${pct(ci[1])}` : 'Pas assez de volume pour un intervalle'} · ITM {(itm * 100).toFixed(1)} %</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-sm text-gray-200">{msg}{zero}</p>
+          <div className="grid md:grid-cols-2 gap-4">
+            <Table rows={data.rooms} label="Room" />
+            <Table rows={data.formats} label="Format" />
+          </div>
+          <p className="text-[11px] text-gray-500">* moins de {AN_MIN_N} re-entries : chiffre indicatif, un seul gros score peut le faire basculer. Les add-ons Unibet ne sont pas comptés comme des re-entries.</p>
+        </div>
+      );
+    }
+
     function AnalyseTab({ playedTournaments }) {
       const [period, setPeriod] = useState('all');
       const [fRoom, setFRoom]   = useState('');
@@ -3627,6 +3704,7 @@
             </table>
           </div>
           <p className="text-xs text-gray-500">Barre : intervalle à 95 % du ROI, trait blanc : ROI observé, trait vertical : 0 %. Un segment est comparé à l'ensemble de tes autres tournois sur la même période.</p>
+          {tourns.length > 0 && <ReentryCard tourns={tourns} />}
         </div>
       );
     }
