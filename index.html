@@ -2998,6 +2998,13 @@
         const days = {}; ts.forEach(t => { const d = new Date(t.date + 'T12:00:00').getDay(); days[d] = (days[d] || 0) + 1; });
         const players = ts.map(t => t.players).filter(Boolean);
         const lvls = ts.map(t => t.lvl).filter(v => v > 0);
+        // niveau 1 (souvent plus long) : valeur exacte de la structure Winamax (bb1 = 0) = la plus fréquente ;
+        // sinon mesurée dans les mains, seulement sur les éditions où tu as vu la toute première blind
+        const l1w = ts.filter(t => t.bb1 === 0 && t.lvl1 > 0).map(t => t.lvl1);
+        const bbMin = Math.min(...ts.filter(t => t.bb1 > 0).map(t => t.bb1));
+        const l1h = ts.filter(t => t.bb1 > 0 && t.bb1 === bbMin && t.lvl1 > 0).map(t => t.lvl1);
+        const lvl1 = l1w.length ? Number(Object.entries(l1w.reduce((m, v) => (m[v] = (m[v] || 0) + 1, m), {})).sort((a, b) => b[1] - a[1])[0][0])
+          : l1h.length ? plQ(l1h, 0.75) : null;
         return {
           key: k, room: ts[0].room, name: plNorm(ts[0].name), buyIn: ts[0].buyIn, format: ts[0].format,
           n: ts.length, inv: i, profit: p, roi: i ? p / i : 0,
@@ -3005,7 +3012,7 @@
           itm: ts.filter(t => t.itm).length / ts.length,
           entries: ts.reduce((a, t) => a + t.nbEntry, 0) / ts.length,
           start: scheds.length ? plMed(scheds) : plQ(starts, 0.1), dur: Math.round(plMean(durs) || 60), durKnown: durs.length > 0, durMax: durs.length ? Math.max(...durs) : null,
-          lvl: plMed(lvls),
+          lvl: plMed(lvls), lvl1,
           lastReg: starts.length >= 3 ? plQ(starts, 0.8) : null,
           players: plMed(players), playersEst: ts.some(t => t.playersEst),
           days, daily: Object.keys(days).length >= 4,
@@ -3013,7 +3020,10 @@
         };
       }).map(c => {
         const nLvl = PL_LATE_LVL[c.format] || 3;
-        if (c.start != null && c.lvl) return { ...c, lateLvl: nLvl, late: Math.round(c.start + nLvl * c.lvl), lateFrom: 'niveaux' };
+        if (c.start != null && c.lvl) {
+          const l1 = c.lvl1 && c.lvl1 >= c.lvl ? c.lvl1 : c.lvl;
+          return { ...c, lvl1: l1, lateLvl: nLvl, late: Math.round(c.start + l1 + (nLvl - 1) * c.lvl), lateFrom: 'niveaux' };
+        }
         const est = c.start != null && c.lastReg != null && c.lastReg > c.start + 5 ? Math.min(c.lastReg, c.start + 150) : null;
         return { ...c, lateLvl: nLvl, late: est, lateFrom: est != null ? 'habitudes' : null };
       }) };
@@ -3220,7 +3230,7 @@
                       <td className="px-3 py-2"><input type="checkbox" readOnly checked={sel.has(c.key)} style={{ accentColor: '#f59e0b' }} /></td>
                       <td className="px-3 py-2">{prioBadge(c)}</td>
                       <td className="px-3 py-2 text-gray-200 font-mono">{svFmt(c.start)}{c.ps > c.start && <span className="block text-[10px] text-sky-300">late à {svFmt(c.ps)}</span>}</td>
-                      <td className="px-3 py-2 text-gray-400 font-mono text-xs whitespace-nowrap" title={c.lateFrom === 'niveaux' ? `fin du niveau ${c.lateLvl} (niveaux de ${c.lvl} min)` : c.lateFrom === 'habitudes' ? "estimé d'après tes inscriptions tardives (durée des niveaux inconnue)" : ''}>{c.late != null ? <>{svFmt(c.late)}<span className="block text-[10px] text-gray-500">{c.lateFrom === 'niveaux' ? `niv. ${c.lateLvl} · ${c.lvl} min` : 'estimé'}</span></> : '?'}</td>
+                      <td className="px-3 py-2 text-gray-400 font-mono text-xs whitespace-nowrap" title={c.lateFrom === 'niveaux' ? `fin du niveau ${c.lateLvl} : niveau 1 de ${c.lvl1} min, puis ${c.lvl} min par niveau` : c.lateFrom === 'habitudes' ? "estimé d'après tes inscriptions tardives (durée des niveaux inconnue)" : ''}>{c.late != null ? <>{svFmt(c.late)}<span className="block text-[10px] text-gray-500">{c.lateFrom === 'niveaux' ? `niv. ${c.lateLvl} · ${c.lvl1 > c.lvl ? `${c.lvl1}+` : ''}${c.lvl} min` : 'estimé'}</span></> : '?'}</td>
                       <td className="px-3 py-2 text-gray-500 font-mono text-xs">{svFmt(c.ps + c.dur)}</td>
                       <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
                       <td className="px-3 py-2 text-gray-200">{c.name}</td>
@@ -3241,7 +3251,7 @@
             <div className="flex flex-wrap gap-2 items-center">
               <Btn onClick={savePlan} disabled={!plan.length} cls="bg-amber-600 hover:bg-amber-700 text-white">💾 Enregistrer cette session prévue</Btn>
               {picked && <Btn onClick={() => setPicked(null)} cls="bg-gray-700 hover:bg-gray-600 text-gray-200">↺ Revenir à la proposition</Btn>}
-              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué, avec chaque score plafonné à {PL_CAP} buy-ins, pour ne pas surestimer un coup de chance. Late reg : jusqu'à la fin du niveau 1 pour les Trident, du niveau 3 pour les KO, SKO et Mystery, du niveau 6 pour les Vanilla, calculé avec la durée des niveaux lue dans tes historiques (sinon estimé d'après tes inscriptions tardives). Si une table manque au début, la proposition peut décaler ton inscription dans la late reg.</p>
+              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué, avec chaque score plafonné à {PL_CAP} buy-ins, pour ne pas surestimer un coup de chance. Late reg : jusqu'à la fin du niveau 1 pour les Trident, du niveau 3 pour les KO, SKO et Mystery, du niveau 6 pour les Vanilla, calculé avec la durée des niveaux lue dans tes historiques, niveau 1 compté à part car il est souvent plus long (« 40+8 min » = niveau 1 de 40 min puis 8 min par niveau) (sinon estimé d'après tes inscriptions tardives). Si une table manque au début, la proposition peut décaler ton inscription dans la late reg.</p>
             </div>
           </>)}
 
