@@ -3686,6 +3686,186 @@
       );
     }
 
+    // ─── Lien winrate en bb/100 → ROI (par session ou par semaine) ───
+    function isoWeek(ds) {
+      const d = new Date(ds + 'T12:00:00'); const day = (d.getDay() + 6) % 7;
+      d.setDate(d.getDate() - day + 3);
+      const y = d.getFullYear(), jan4 = new Date(y, 0, 4);
+      const w = 1 + Math.round(((d - jan4) / 864e5 - 3 + ((jan4.getDay() + 6) % 7)) / 7);
+      return `${y}-S${String(w).padStart(2, '0')}`;
+    }
+    // Régression pondérée y = a + b·x (poids w) + corrélation pondérée
+    function wFit(pts) {
+      const W = pts.reduce((s, p) => s + p.w, 0);
+      if (!W || pts.length < 3) return null;
+      const mx = pts.reduce((s, p) => s + p.w * p.x, 0) / W, my = pts.reduce((s, p) => s + p.w * p.y, 0) / W;
+      let sxx = 0, sxy = 0, syy = 0;
+      pts.forEach(p => { sxx += p.w * (p.x - mx) ** 2; sxy += p.w * (p.x - mx) * (p.y - my); syy += p.w * (p.y - my) ** 2; });
+      if (!sxx) return null;
+      const b = sxy / sxx;
+      return { a: my - b * mx, b, r: syy ? sxy / Math.sqrt(sxx * syy) : 0, mx, my };
+    }
+
+    function BBRoiCard({ tourns }) {
+      const [metric, setMetric] = useState('ev');     // 'ev' ou 'won'
+      const [unit, setUnit]     = useState('day');    // 'day' (session) ou 'week'
+      const [minH, setMinH]     = useState(500);
+      const [hover, setHover]   = useState(null);
+
+      const data = useMemo(() => {
+        const rows = tourns.filter(t => t.bbHands);
+        if (!rows.length) return null;
+        const key = t => unit === 'week' ? isoWeek(t.date) : t.date;
+        const g = {};
+        rows.forEach(t => {
+          const k = key(t);
+          const o = g[k] || (g[k] = { k, hands: 0, bb: 0, inv: 0, prof: 0, n: 0 });
+          o.hands += t.bbHands; o.bb += metric === 'ev' ? (t.bbEV || 0) : (t.bbWon || 0);
+          o.inv += t.buyIn * t.nbEntry; o.prof += t.profit; o.n += 1;
+        });
+        const all = Object.values(g).filter(o => o.inv > 0);
+        const pts = all.filter(o => o.hands >= minH).map(o => ({ ...o, x: 100 * o.bb / o.hands, y: o.prof / o.inv, w: o.inv }));
+        const fit = wFit(pts);
+        let ci = null;
+        if (fit && pts.length >= 8) {            // intervalle de la pente : bootstrap sur les points
+          const rnd = anRng(99), bs = [];
+          for (let i = 0; i < 1000; i++) {
+            const s = Array.from({ length: pts.length }, () => pts[(rnd() * pts.length) | 0]);
+            const f = wFit(s); if (f) bs.push(f.b);
+          }
+          ci = [anQuant(bs, 0.025), anQuant(bs, 0.975)];
+        }
+        // ROI prédit par segment (format, room) avec le modèle, comparé au ROI réel
+        const seg = field => {
+          const m = {};
+          rows.forEach(t => {
+            const v = t[field] || '—'; const o = m[v] || (m[v] = { v, hands: 0, bb: 0, inv: 0, prof: 0, n: 0 });
+            o.hands += t.bbHands; o.bb += metric === 'ev' ? (t.bbEV || 0) : (t.bbWon || 0);
+            o.inv += t.buyIn * t.nbEntry; o.prof += t.profit; o.n += 1;
+          });
+          return Object.values(m).filter(o => o.inv > 0).map(o => {
+            const x = 100 * o.bb / o.hands, roi = o.prof / o.inv, pred = fit ? fit.a + fit.b * x : null;
+            return { ...o, x, roi, pred, gap: pred == null ? null : roi - pred };
+          }).sort((a, b) => b.hands - a.hands);
+        };
+        return { pts, fit, ci, nAll: all.length, formats: seg('format'), rooms: seg('room') };
+      }, [tourns, metric, unit, minH]);
+
+      if (!data) return null;
+      const { pts, fit, ci } = data;
+      const pct = (x, d = 1) => `${x > 0 ? '+' : ''}${(x * 100).toFixed(d)} %`;
+      const lbl = metric === 'ev' ? 'bb/100 EV' : 'bb/100 réel';
+      const uLbl = unit === 'week' ? 'semaine' : 'session';
+
+      // Nuage de points en SVG (échelle commune pour points, axes et droite)
+      const Wd = 760, Ht = 320, L = 52, R = 14, T = 14, B = 38;
+      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+      const pad = (lo, hi, f) => { const d = (hi - lo) || 1; return [lo - d * f, hi + d * f]; };
+      const [x0, x1] = pts.length ? pad(Math.min(0, ...xs), Math.max(0, ...xs), 0.05) : [-50, 50];
+      // axe du ROI : on coupe les 2 % de points extrêmes (une grosse perf écraserait tout le reste) ; ils restent dessinés au bord
+      const ysS = [...ys].sort((a, b) => a - b), q = f => ysS.length ? ysS[Math.min(ysS.length - 1, Math.floor(f * (ysS.length - 1)))] : 0;
+      const [y0, y1] = pts.length ? pad(Math.min(-1, q(0.02)), Math.max(1, q(0.98)), 0.05) : [-1, 1];
+      const sx = x => L + (x - x0) / (x1 - x0) * (Wd - L - R);
+      const sy = y => T + (1 - (y - y0) / (y1 - y0)) * (Ht - T - B);
+      const ticks = (lo, hi, n) => { const step = Math.pow(10, Math.floor(Math.log10((hi - lo) / n))); const m = [1, 2, 5, 10].find(k => (hi - lo) / (step * k) <= n) * step; const out = []; for (let v = Math.ceil(lo / m) * m; v <= hi; v += m) out.push(+v.toFixed(6)); return out; };
+      const maxW = Math.max(1, ...pts.map(p => p.w));
+      const rad = w => 3 + 7 * Math.sqrt(w / maxW);
+
+      const strength = r => { const a = Math.abs(r); return a < 0.1 ? 'quasi nul' : a < 0.3 ? 'faible' : a < 0.5 ? 'modéré' : a < 0.7 ? 'net' : 'fort'; };
+      const signif = ci && (ci[0] > 0 || ci[1] < 0);
+
+      const SegTable = ({ title, rows }) => (
+        <div className="overflow-x-auto rounded-lg border border-gray-700">
+          <table className="w-full text-sm whitespace-nowrap" style={{ minWidth: '560px' }}>
+            <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+              <tr>{[title, 'Mains', lbl, 'ROI réel', 'ROI attendu', 'Écart'].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map(s => (
+                <tr key={s.v} className="border-t border-gray-700">
+                  <td className="px-3 py-2 text-gray-200 font-medium">{s.v}</td>
+                  <td className="px-3 py-2 text-gray-400">{s.hands.toLocaleString('fr-FR')}</td>
+                  <td className={`px-3 py-2 ${s.x >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtBB(s.x)}</td>
+                  <td className={`px-3 py-2 font-semibold ${s.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(s.roi)}</td>
+                  <td className="px-3 py-2 text-gray-300">{s.pred == null ? '—' : pct(s.pred)}</td>
+                  <td className="px-3 py-2">{s.gap == null ? '—' : <span className={s.gap >= 0 ? 'text-green-400' : 'text-red-400'}>{pct(s.gap)}</span>}
+                    {s.n < 100 && <span className="ml-2 text-xs text-gray-500">({s.n} tournois, peu fiable)</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+
+      return (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <p className="text-sm font-semibold text-gray-200 self-center mr-2">Winrate en jetons → ROI : est-ce que tu convertis ?</p>
+            <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
+              {[['ev', 'bb/100 EV'], ['won', 'bb/100 réel']].map(([v, l]) => (
+                <button key={v} onClick={() => setMetric(v)} className={`px-3 py-1 rounded text-xs font-medium ${metric === v ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+              ))}
+            </div>
+            <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
+              {[['day', 'Par session'], ['week', 'Par semaine']].map(([v, l]) => (
+                <button key={v} onClick={() => setUnit(v)} className={`px-3 py-1 rounded text-xs font-medium ${unit === v ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-gray-400">Mains mini par point
+              <Sel value={minH} onChange={v => setMinH(Number(v))} options={[200, 500, 1000, 2000].map(v => ({ value: v, label: String(v) }))} />
+            </div>
+          </div>
+
+          {!fit && <p className="text-sm text-gray-400">Pas assez de {uLbl}s avec au moins {minH} mains pour calculer le lien (il en faut 3).</p>}
+
+          {fit && (<>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-gray-900 rounded-lg p-3"><p className="text-xs text-gray-500 mb-1">Corrélation (r)</p><p className="text-xl font-bold text-white">{fit.r.toFixed(2)}</p><p className="text-xs text-gray-500">lien {strength(fit.r)}, r² = {(fit.r ** 2 * 100).toFixed(0)} %</p></div>
+              <div className="bg-gray-900 rounded-lg p-3"><p className="text-xs text-gray-500 mb-1">+10 {lbl} =</p><p className={`text-xl font-bold ${fit.b >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(fit.b * 10)} de ROI</p><p className="text-xs text-gray-500">{ci ? `intervalle 95 % : ${pct(ci[0] * 10, 0)} à ${pct(ci[1] * 10, 0)}` : 'intervalle : trop peu de points'}</p></div>
+              <div className="bg-gray-900 rounded-lg p-3"><p className="text-xs text-gray-500 mb-1">ROI à 0 bb/100</p><p className={`text-xl font-bold ${fit.a >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pct(fit.a)}</p><p className="text-xs text-gray-500">ce que rapporte une {uLbl} neutre en jetons</p></div>
+              <div className="bg-gray-900 rounded-lg p-3"><p className="text-xs text-gray-500 mb-1">Points analysés</p><p className="text-xl font-bold text-white">{pts.length}</p><p className="text-xs text-gray-500">{uLbl}s ≥ {minH} mains, sur {data.nAll}</p></div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <svg viewBox={`0 0 ${Wd} ${Ht}`} className="w-full" style={{ minWidth: 520, maxHeight: 360 }} onMouseLeave={() => setHover(null)}>
+                <defs><clipPath id="bbroi-clip"><rect x={L} y={T} width={Wd - L - R} height={Ht - T - B} /></clipPath></defs>
+                {ticks(y0, y1, 6).map(v => <g key={'y' + v}><line x1={L} x2={Wd - R} y1={sy(v)} y2={sy(v)} stroke="#374151" strokeDasharray="3 3" /><text x={L - 6} y={sy(v) + 3} fill="#9ca3af" fontSize="10" textAnchor="end">{Math.round(v * 100)}%</text></g>)}
+                {ticks(x0, x1, 8).map(v => <g key={'x' + v}><line x1={sx(v)} x2={sx(v)} y1={T} y2={Ht - B} stroke="#374151" strokeDasharray="3 3" /><text x={sx(v)} y={Ht - B + 14} fill="#9ca3af" fontSize="10" textAnchor="middle">{v}</text></g>)}
+                <line x1={L} x2={Wd - R} y1={sy(0)} y2={sy(0)} stroke="#6b7280" />
+                <line x1={sx(0)} x2={sx(0)} y1={T} y2={Ht - B} stroke="#6b7280" />
+                <text x={(L + Wd - R) / 2} y={Ht - 6} fill="#9ca3af" fontSize="11" textAnchor="middle">{lbl} de la {uLbl}</text>
+                <text x={12} y={(T + Ht - B) / 2} fill="#9ca3af" fontSize="11" textAnchor="middle" transform={`rotate(-90 12 ${(T + Ht - B) / 2})`}>ROI</text>
+                {pts.map(p => (
+                  <circle key={p.k} cx={sx(p.x)} cy={sy(Math.max(y0, Math.min(y1, p.y)))} r={rad(p.w)}
+                    fill={p.y >= 0 ? '#22c55e' : '#ef4444'} fillOpacity={hover && hover.k === p.k ? 0.95 : 0.55} stroke={p.y >= 0 ? '#16a34a' : '#dc2626'}
+                    onMouseEnter={() => setHover(p)} />
+                ))}
+                <line x1={sx(x0)} y1={sy(fit.a + fit.b * x0)} x2={sx(x1)} y2={sy(fit.a + fit.b * x1)} stroke="#a5b4fc" strokeWidth="2" clipPath="url(#bbroi-clip)" />
+              </svg>
+            </div>
+            <p className="text-xs text-gray-400 h-4">{hover
+              ? `${unit === 'week' ? 'Semaine ' + hover.k : new Date(hover.k + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })} · ${hover.n} tournois · ${hover.hands.toLocaleString('fr-FR')} mains · ${fmtBB(hover.x)} ${lbl} · ROI ${pct(hover.y)} · investi ${Math.round(hover.inv)} €`
+              : 'Un point = une ' + uLbl + ' (taille = montant investi). Droite violette : régression pondérée par l\'investi.'}</p>
+
+            <div className="text-sm text-gray-300 bg-gray-900 rounded-lg p-3 space-y-1">
+              <p>
+                {signif
+                  ? <>Le lien est <b>{fit.b > 0 ? 'positif' : 'négatif'} et significatif</b> : en moyenne, une {uLbl} à +10 {lbl} de plus rapporte {pct(fit.b * 10)} de ROI en plus.</>
+                  : <>Le lien n'est <b>pas encore démontré</b> avec ce volume : l'intervalle de la pente contient 0. Le ROI d'une {uLbl} dépend encore surtout de quelques gros scores.</>}
+                {' '}Ton {lbl} explique environ {(fit.r ** 2 * 100).toFixed(0)} % des écarts de ROI entre {uLbl}s ; le reste vient des places payées, de l'ICM, des bounties et de la variance.
+              </p>
+              <p className="text-gray-400">Tableaux ci-dessous : le ROI que le modèle attend d'après ton {lbl} dans chaque segment, comparé à ton ROI réel. Un écart positif veut dire que tu transformes mieux tes jetons en argent dans ce segment (tables finales, ICM, bounties) ; négatif, moins bien. Avec moins de 100 tournois, l'écart reste surtout de la variance.</p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <SegTable title="Format" rows={data.formats} />
+              <SegTable title="Room" rows={data.rooms} />
+            </div>
+          </>)}
+        </div>
+      );
+    }
+
     function AnalyseTab({ playedTournaments }) {
       const [period, setPeriod] = useState('all');
       const [fRoom, setFRoom]   = useState('');
@@ -3847,6 +4027,7 @@
           </div>
           <p className="text-xs text-gray-500">Barre : intervalle à 95 % du ROI, trait blanc : ROI observé, trait vertical : 0 %. Un segment est comparé à l'ensemble de tes autres tournois sur la même période.</p>
           {tourns.length > 0 && <ReentryCard tourns={tourns} />}
+          {tourns.length > 0 && <BBRoiCard tourns={tourns} />}
         </div>
       );
     }
