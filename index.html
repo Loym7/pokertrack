@@ -2063,6 +2063,63 @@
       );
     }
 
+    // ─── Winrate en big blinds (champs écrits par l'import : bbHands, bbWon, bbEV, bbSD) ───
+    function bbStats(ts) {
+      let hands = 0, won = 0, ev = 0, sd = 0;
+      ts.forEach(t => { if (t.bbHands) { hands += t.bbHands; won += t.bbWon || 0; ev += t.bbEV || 0; sd += t.bbSD || 0; } });
+      if (!hands) return null;
+      const k = 100 / hands;
+      return { hands, won: won * k, ev: ev * k, sd: sd * k, nsd: (won - sd) * k, luck: (won - ev) * k, bbLuck: won - ev };
+    }
+    const fmtBB = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
+
+    // Courbe cumulée tournoi par tournoi, axe X = mains jouées
+    function bbCumul(ts) {
+      const rows = ts.filter(t => t.bbHands).sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
+      let h = 0, w = 0, e = 0, sd = 0;
+      const out = [{ hands: 0, won: 0, ev: 0, sd: 0, nsd: 0 }];
+      rows.forEach(t => {
+        h += t.bbHands; w += t.bbWon || 0; e += t.bbEV || 0; sd += t.bbSD || 0;
+        out.push({ hands: h, won: Math.round(w), ev: Math.round(e), sd: Math.round(sd), nsd: Math.round(w - sd), name: t.name, date: t.date });
+      });
+      return out;
+    }
+
+    const BB_NAMES = { won: 'Réel', ev: 'EV', sd: 'Showdown', nsd: 'Sans showdown' };
+    function BBChart({ data, height = 220 }) {
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+            <XAxis dataKey="hands" type="number" domain={[0, 'dataMax']} tick={{ fill:'#9ca3af', fontSize:10 }} tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v} />
+            <YAxis tick={{ fill:'#9ca3af', fontSize:10 }} />
+            <Tooltip contentStyle={{ background:'#111827', border:'1px solid #374151', borderRadius:6 }} labelStyle={{ color:'#9ca3af' }}
+              labelFormatter={(v, p) => { const r = p && p[0] && p[0].payload; return r && r.name ? `${v} mains · ${r.date} ${r.name}` : `${v} mains`; }}
+              formatter={(v, k) => [`${v >= 0 ? '+' : ''}${v} bb`, BB_NAMES[k] || k]} />
+            <Legend formatter={k => BB_NAMES[k] || k} wrapperStyle={{ fontSize:11 }} />
+            <Line type="linear" dataKey="won" stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Line type="linear" dataKey="ev" stroke="#facc15" strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Line type="linear" dataKey="sd" stroke="#60a5fa" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Line type="linear" dataKey="nsd" stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    // Détail sous les KPI : showdown, sans showdown, écart à l'EV
+    function BBDetail({ bb }) {
+      const reliab = bb.hands < 10000 ? "échantillon faible, l'écart à l'EV pèse encore beaucoup" : bb.hands < 50000 ? 'échantillon moyen' : 'échantillon solide';
+      return (
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-400 px-1">
+          <span>Showdown <b className={bb.sd >= 0 ? 'text-blue-300' : 'text-red-400'}>{fmtBB(bb.sd)}</b> bb/100</span>
+          <span>Sans showdown <b className={bb.nsd >= 0 ? 'text-green-400' : 'text-rose-400'}>{fmtBB(bb.nsd)}</b> bb/100</span>
+          <span>Réel − EV <b className={bb.luck >= 0 ? 'text-green-400' : 'text-red-400'}>{fmtBB(bb.luck)}</b> bb/100 ({bb.bbLuck >= 0 ? '+' : ''}{Math.round(bb.bbLuck)} bb)</span>
+          <span className="text-gray-500">{bb.hands.toLocaleString('fr-FR')} mains, {reliab}</span>
+        </div>
+      );
+    }
+
+
     function DashboardTab({ sessions, playedTournaments, expressoSessions = [] }) {
       const [dashTab, setDashTab]     = useState('tournois');
       const [period, setPeriod]       = useState('30');
@@ -2125,7 +2182,8 @@
         const itmR      = totalEntries > 0 ? ((itm / totalEntries) * 100).toFixed(1) : '0';
         const reEntries = filtered.reduce((a, t) => a + Math.max(0, t.nbEntry - 1), 0);
         const abi = totalEntries > 0 ? Math.round(invest / totalEntries * 100) / 100 : 0;
-        return { grind: filtSess.length, hours: Math.round(totalH), total: filtered.length, roi, profit, itmR, reEntries, abi };
+        const bb = bbStats(filtered);
+        return { grind: filtSess.length, hours: Math.round(totalH), total: filtered.length, roi, profit, itmR, reEntries, abi, bb };
       }, [filtered, filtSess]);
 
       const cumulData = useMemo(() => {
@@ -2135,6 +2193,8 @@
         sorted.forEach(t => { cum += t.profit; map[t.date] = cum; });
         return Object.entries(map).map(([d, profit]) => ({ date: d.slice(5), profit }));
       }, [filtered]);
+
+      const bbCurve = useMemo(() => bbCumul(filtered), [filtered]);
 
       const byRoom = useMemo(() => {
         const m = {};
@@ -2393,7 +2453,7 @@
           </div>
 
           {/* KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 lg:grid-cols-9 gap-3">
             <KpiCard label="Sessions Grind"  value={kpi.grind} />
             <KpiCard label="Total Heures"    value={`${kpi.hours}h`} />
             <KpiCard label="Tournois / Re-Entry" value={`${kpi.total} / ${kpi.reEntries}`} color="text-orange-400" />
@@ -2401,7 +2461,10 @@
             <KpiCard label="ROI" value={`${kpi.roi}%`} color={Number(kpi.roi)>=0?'text-green-400':'text-red-400'} />
             <KpiCard label="Profit Net" value={`${kpi.profit>=0?'+':''}${kpi.profit.toFixed(2)}€`} color={kpi.profit>=0?'text-green-400':'text-red-400'} />
             <KpiCard label="ITM Rate" value={`${kpi.itmR}%`} color="text-yellow-400" />
+            <KpiCard label="bb/100" value={kpi.bb ? fmtBB(kpi.bb.won) : '—'} color={kpi.bb && kpi.bb.won >= 0 ? 'text-green-400' : 'text-red-400'} />
+            <KpiCard label="bb/100 EV" value={kpi.bb ? fmtBB(kpi.bb.ev) : '—'} color={kpi.bb && kpi.bb.ev >= 0 ? 'text-yellow-300' : 'text-orange-400'} />
           </div>
+          {kpi.bb && <BBDetail bb={kpi.bb} />}
 
           {/* ══════════ ONGLET TOURNOIS ══════════ */}
           {dashTab === 'tournois' && (<>
@@ -2420,6 +2483,13 @@
               </LineChart>
             </ResponsiveContainer>
           </div>
+
+          {bbCurve.length > 2 && (
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+              <p className="text-sm font-semibold text-gray-300 mb-3">Gains cumulés en big blinds</p>
+              <BBChart data={bbCurve} height={240} />
+            </div>
+          )}
 
           <SectionLabel>💰 Profit par catégorie</SectionLabel>
 
@@ -2806,6 +2876,7 @@
       const itm = ts.filter(t => t.itm).length;
       const bounty = ts.reduce((a, t) => a + (t.bounty || 0), 0);
       const hands = ts.reduce((a, t) => a + (t.hands || 0), 0);
+      const sbb = bbStats(ts);
       const timed = ts.filter(t => t._st != null);
       const t0 = timed.length ? Math.floor(Math.min(...timed.map(t => t._st)) / 60) * 60 : 0;
       const t1 = timed.length ? Math.ceil(Math.max(...timed.map(t => t._en)) / 60) * 60 : 60;
@@ -2867,7 +2938,7 @@
             <p className="text-sm text-gray-400">{sel.code} · {sel.typeSession} · {sel.start} → {sel.end} ({sel.duration})</p>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
             <Kpi label={entries > ts.length ? `Tournois (${entries} entrées)` : 'Tournois'} value={ts.length} />
             <Kpi label="Investi" value={svEur(inv)} />
             <Kpi label="Gains" value={svEur(gains)} />
@@ -2876,7 +2947,10 @@
             <Kpi label="ITM" value={`${itm}/${ts.length}`} />
             <Kpi label="Bounties" value={svEur(bounty)} color="text-purple-300" />
             <Kpi label="Mains" value={hands.toLocaleString('fr-FR')} />
+            <Kpi label="bb/100" value={sbb ? fmtBB(sbb.won) : '—'} color={sbb && sbb.won >= 0 ? 'text-green-400' : 'text-red-400'} />
+            <Kpi label="bb/100 EV" value={sbb ? fmtBB(sbb.ev) : '—'} color={sbb && sbb.ev >= 0 ? 'text-yellow-300' : 'text-orange-400'} />
           </div>
+          {sbb && <BBDetail bb={sbb} />}
 
           {/* Courbe de la session */}
           {curve.length > 2 && (
