@@ -2973,6 +2973,11 @@
     const plMed = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
     const plQ = (a, q) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(q * (s.length - 1))]; };
     const PL_DAYS = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+    // Late reg maximum, en niveaux de blinds : Trident jusqu'au niveau 1, KO / SKO / Mystery jusqu'au niveau 3, Vanilla jusqu'au niveau 6
+    const PL_LATE_LVL = { TRIDENT: 1, PKO: 3, SKO: 3, MKO: 3, VNL: 6 };
+    const plMean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+    const PL_PREFS_KEY = 'pt_planner_prefs';
+    const plPrefs = (() => { try { return JSON.parse(localStorage.getItem(PL_PREFS_KEY) || '{}') || {}; } catch (e) { return {}; } })();
 
     function plCatalogue(played) {
       const valid = played.filter(t => t.buyIn > 0 && t.startTime);
@@ -2992,19 +2997,26 @@
         const durs = ts.map(t => { const s = svMin(t.startTime), e = svMin(t.endTime); return s != null && e != null && e > s ? e - s : null; }).filter(v => v != null);
         const days = {}; ts.forEach(t => { const d = new Date(t.date + 'T12:00:00').getDay(); days[d] = (days[d] || 0) + 1; });
         const players = ts.map(t => t.players).filter(Boolean);
+        const lvls = ts.map(t => t.lvl).filter(v => v > 0);
         return {
           key: k, room: ts[0].room, name: plNorm(ts[0].name), buyIn: ts[0].buyIn, format: ts[0].format,
           n: ts.length, inv: i, profit: p, roi: i ? p / i : 0,
           adj: (pCap + PL_K * g * per) / (i + PL_K * per),
           itm: ts.filter(t => t.itm).length / ts.length,
           entries: ts.reduce((a, t) => a + t.nbEntry, 0) / ts.length,
-          start: scheds.length ? plMed(scheds) : plQ(starts, 0.1), dur: plMed(durs) || 60, durMax: durs.length ? Math.max(...durs) : null,
+          start: scheds.length ? plMed(scheds) : plQ(starts, 0.1), dur: Math.round(plMean(durs) || 60), durKnown: durs.length > 0, durMax: durs.length ? Math.max(...durs) : null,
+          lvl: plMed(lvls),
           lastReg: starts.length >= 3 ? plQ(starts, 0.8) : null,
           players: plMed(players), playersEst: ts.some(t => t.playersEst),
           days, daily: Object.keys(days).length >= 4,
           last: ts.map(t => t.date).sort().slice(-1)[0],
         };
-      }).map(c => ({ ...c, late: c.start != null && c.lastReg != null && c.lastReg > c.start + 5 ? Math.min(c.lastReg, c.start + 150) : null })) };
+      }).map(c => {
+        const nLvl = PL_LATE_LVL[c.format] || 3;
+        if (c.start != null && c.lvl) return { ...c, lateLvl: nLvl, late: Math.round(c.start + nLvl * c.lvl), lateFrom: 'niveaux' };
+        const est = c.start != null && c.lastReg != null && c.lastReg > c.start + 5 ? Math.min(c.lastReg, c.start + 150) : null;
+        return { ...c, lateLvl: nLvl, late: est, lateFrom: est != null ? 'habitudes' : null };
+      }) };
     }
 
     function PlannerTab({ playedTournaments, plans, setPlans }) {
@@ -3014,11 +3026,13 @@
       const [from, setFrom] = useState('18:00');
       const [to, setTo] = useState('23:30');
       const [selRooms, setSelRooms] = useState(null);
-      const [maxBuy, setMaxBuy] = useState(20);
-      const [maxTables, setMaxTables] = useState(9);
-      const [minN, setMinN] = useState(3);
-      const [minAdj, setMinAdj] = useState(0);
-      const [recent, setRecent] = useState(60);
+      const [minBuy, setMinBuy] = useState(plPrefs.minBuy ?? 0);
+      const [maxBuy, setMaxBuy] = useState(plPrefs.maxBuy ?? 20);
+      const [maxTables, setMaxTables] = useState(plPrefs.maxTables ?? 9);
+      const [minN, setMinN] = useState(plPrefs.minN ?? 3);
+      const [minAdj, setMinAdj] = useState(plPrefs.minAdj ?? 0);
+      const [recent, setRecent] = useState(plPrefs.recent ?? 60);
+      useEffect(() => { try { localStorage.setItem(PL_PREFS_KEY, JSON.stringify({ minBuy, maxBuy, maxTables, minN, minAdj, recent })); } catch (e) {} }, [minBuy, maxBuy, maxTables, minN, minAdj, recent]);
       const [picked, setPicked] = useState(null);   // null = proposition automatique
       const [view, setView] = useState('plan');
       const [q, setQ] = useState('');
@@ -3032,25 +3046,40 @@
       const fromM = svMin(from), toM = svMin(to) ?? 1440;
 
       const recentCut = useMemo(() => { if (!recent) return ''; const d = new Date(date + 'T12:00:00'); d.setDate(d.getDate() - recent); return toStr(d); }, [date, recent]);
-      const candidates = useMemo(() => cat.items.filter(c =>
-        c.start != null && activeRooms.includes(c.room) && c.buyIn <= maxBuy && c.n >= minN
-        && (!recentCut || c.last >= recentCut)
+      // un tournoi passe-t-il les filtres ? (skip = filtre ignoré, pour expliquer ce qui limite le nombre de tables)
+      const passes = (c, skip) => c.start != null && activeRooms.includes(c.room)
+        && (skip === 'buy' || (c.buyIn <= maxBuy && c.buyIn >= minBuy))
+        && (skip === 'n' || c.n >= minN)
+        && (skip === 'recent' || !recentCut || c.last >= recentCut)
+        && (skip === 'adj' || c.adj >= minAdj / 100)
         && !/\b(DAY|JOUR)\s*\d/i.test(c.name) && !/SERIES|ISLANDS|MILLION WEEK/i.test(c.name)
-        && (c.days[wd] || c.daily) && c.start <= toM - 30 && (c.start >= fromM - 15 || (c.late != null && c.late >= fromM))
-      ).map(c => ({ ...c, ps: Math.max(c.start, fromM) })).sort((a, b) => a.ps - b.ps), [cat, activeRooms, maxBuy, minN, wd, fromM, toM, recentCut]);
+        && (c.days[wd] || c.daily) && c.start <= toM - 30 && (c.start >= fromM || (c.late != null ? c.late >= fromM : c.start >= fromM - 15));
+      const candidates = useMemo(() => cat.items.filter(c => passes(c, 'adj'))
+        .map(c => ({ ...c, ps: Math.max(c.start, fromM) })).sort((a, b) => a.ps - b.ps), [cat, activeRooms, minBuy, maxBuy, minN, wd, fromM, toM, recentCut]);
+      const blocked = useMemo(() => ({
+        adj: cat.items.filter(c => passes(c, 'adj') && !passes(c)).length,
+        n: cat.items.filter(c => passes(c, 'n') && !passes(c)).length,
+        recent: cat.items.filter(c => passes(c, 'recent') && !passes(c)).length,
+        buy: cat.items.filter(c => passes(c, 'buy') && !passes(c)).length,
+      }), [cat, activeRooms, minBuy, maxBuy, minN, minAdj, wd, fromM, toM, recentCut]);
 
+      const [shift, setShift] = useState({});   // heure d'inscription décalée dans la late reg pour faire de la place
       const auto = useMemo(() => {   // glouton : meilleurs ROI ajustés d'abord, sans dépasser le nombre de tables
-        const chosen = [];
-        const fits = c => { for (let m = c.ps; m < c.ps + c.dur; m += 5) {
+        const chosen = [], sh = {};
+        const fits = (ps, dur) => { for (let m = ps; m < ps + dur; m += 5) {
           if (chosen.filter(x => x.ps <= m && m < x.ps + x.dur).length >= maxTables) return false; } return true; };
-        [...candidates].filter(c => c.adj >= minAdj / 100).sort((a, b) => b.adj - a.adj).forEach(c => { if (fits(c)) chosen.push(c); });
-        return new Set(chosen.map(c => c.key));
+        [...candidates].filter(c => c.adj >= minAdj / 100).sort((a, b) => b.adj - a.adj).forEach(c => {
+          const last = c.late != null ? Math.max(c.ps, c.late) : c.ps;
+          for (let ps = c.ps; ps <= last; ps += 5) if (fits(ps, c.dur)) { chosen.push({ ...c, ps }); if (ps > c.ps) sh[c.key] = ps; break; }
+        });
+        return { set: new Set(chosen.map(c => c.key)), sh };
       }, [candidates, maxTables, minAdj]);
-      useEffect(() => { setPicked(null); }, [date, from, to, maxBuy, maxTables, minN, minAdj, selRooms, recent]);
-      const sel = picked || auto;
+      useEffect(() => { setPicked(null); }, [date, from, to, minBuy, maxBuy, maxTables, minN, minAdj, selRooms, recent]);
+      useEffect(() => { if (!picked) setShift(auto.sh); }, [auto, picked]);
+      const sel = picked || auto.set;
       const toggle = k => { const s = new Set(sel); s.has(k) ? s.delete(k) : s.add(k); setPicked(s); };
 
-      const plan = candidates.filter(c => sel.has(c.key));
+      const plan = candidates.filter(c => sel.has(c.key)).map(c => shift[c.key] ? { ...c, ps: shift[c.key] } : c);
       const prio = useMemo(() => {
         const m = {};
         [...plan].sort((a, b) => b.adj - a.adj).forEach((c, i) => { m[c.key] = { kind: 'S', n: i + 1 }; });
@@ -3104,6 +3133,7 @@
               <div><p className="text-xs text-gray-500 mb-1">Date</p><input type="date" value={date} onChange={e => setDate(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
               <div><p className="text-xs text-gray-500 mb-1">De</p><input type="time" value={from} onChange={e => setFrom(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
               <div><p className="text-xs text-gray-500 mb-1">À</p><input type="time" value={to} onChange={e => setTo(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" /></div>
+              <div><p className="text-xs text-gray-500 mb-1">Buy-in mini</p><Sel value={minBuy} onChange={v => setMinBuy(Number(v))} options={[0,1,2,3,5,10,20].map(v => ({ value: v, label: v ? `${v} €` : 'aucun' }))} /></div>
               <div><p className="text-xs text-gray-500 mb-1">Buy-in max</p><Sel value={maxBuy} onChange={v => setMaxBuy(Number(v))} options={[2,5,10,20,50,100].map(v => ({ value: v, label: `${v} €` }))} /></div>
               <div><p className="text-xs text-gray-500 mb-1">Tables max en même temps</p><Sel value={maxTables} onChange={v => setMaxTables(Number(v))} options={[2,3,4,5,6,7,8,9,10,11,12]} /></div>
               <div><p className="text-xs text-gray-500 mb-1">Joué au moins</p><Sel value={minN} onChange={v => setMinN(Number(v))} options={[1,3,5,10,20].map(v => ({ value: v, label: `${v} fois` }))} /></div>
@@ -3125,9 +3155,25 @@
               <div className="bg-gray-800 border border-gray-700 rounded-lg p-3"><p className="text-[11px] text-gray-500">Pic de tables</p><p className={`text-lg font-bold ${peak > maxTables ? 'text-red-400' : 'text-white'}`}>{peak}</p></div>
             </div>
 
+            {plan.length > 0 && peak < maxTables && (() => {
+              const tips = [
+                blocked.adj && `« ROI ajusté mini » écarte ${blocked.adj} tournoi${blocked.adj > 1 ? 's' : ''}`,
+                blocked.n && `« Joué au moins » en écarte ${blocked.n}`,
+                blocked.recent && `« Joué récemment » en écarte ${blocked.recent}`,
+                blocked.buy && `les buy-ins mini / max en écartent ${blocked.buy}`,
+              ].filter(Boolean);
+              return (
+                <div className="bg-sky-950/40 border border-sky-800 rounded-lg p-3 text-xs text-sky-100">
+                  Pic prévu : <b>{peak} table{peak > 1 ? 's' : ''}</b> sur {maxTables}. Tous les tournois qui passent tes filtres sont déjà dans la session : ce sont les filtres qui limitent, pas le nombre de tables.
+                  {tips.length > 0 && <> Sur ce créneau, {tips.join(', ')}.</>}
+                  {plan.some(c => !c.durKnown) && <> Certains tournois n'ont pas encore d'heure de fin importée (durée comptée 60 min) : lance la mise à jour de l'import pour des durées réelles.</>}
+                </div>
+              );
+            })()}
+
             {plan.length > 0 && (
               <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 overflow-x-auto">
-                <p className="text-xs text-gray-400 mb-2">Frise prévue (durée = ta durée médiane dans chaque tournoi)</p>
+                <p className="text-xs text-gray-400 mb-2">Frise prévue (durée = ton temps moyen passé dans chaque tournoi, busts rapides compris)</p>
                 <div style={{ minWidth: 640 }}>
                   <div className="relative h-5 ml-[190px] border-b border-gray-700">
                     {hours.map(h => <span key={h} className="absolute text-[10px] text-gray-500 -translate-x-1/2" style={{ left: pos(h) }}>{svFmt(h)}</span>)}
@@ -3169,12 +3215,12 @@
                   <tr>{['','Priorité','Début','Late reg ~','Fin ~','Room','Tournoi','Format','Buy-in','Joueurs','Joué','ROI réel','ROI ajusté','ITM',''].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
                 </thead>
                 <tbody>
-                  {candidates.map(c => (
+                  {candidates.map(c => shift[c.key] && sel.has(c.key) ? { ...c, ps: shift[c.key] } : c).map(c => (
                     <tr key={c.key} onClick={() => toggle(c.key)} className={`border-t border-gray-700 cursor-pointer ${sel.has(c.key) ? 'bg-amber-950/40' : 'opacity-60 hover:opacity-100'}`}>
                       <td className="px-3 py-2"><input type="checkbox" readOnly checked={sel.has(c.key)} style={{ accentColor: '#f59e0b' }} /></td>
                       <td className="px-3 py-2">{prioBadge(c)}</td>
                       <td className="px-3 py-2 text-gray-200 font-mono">{svFmt(c.start)}{c.ps > c.start && <span className="block text-[10px] text-sky-300">late à {svFmt(c.ps)}</span>}</td>
-                      <td className="px-3 py-2 text-gray-400 font-mono text-xs">{c.late != null ? svFmt(c.late) : '?'}</td>
+                      <td className="px-3 py-2 text-gray-400 font-mono text-xs whitespace-nowrap" title={c.lateFrom === 'niveaux' ? `fin du niveau ${c.lateLvl} (niveaux de ${c.lvl} min)` : c.lateFrom === 'habitudes' ? "estimé d'après tes inscriptions tardives (durée des niveaux inconnue)" : ''}>{c.late != null ? <>{svFmt(c.late)}<span className="block text-[10px] text-gray-500">{c.lateFrom === 'niveaux' ? `niv. ${c.lateLvl} · ${c.lvl} min` : 'estimé'}</span></> : '?'}</td>
                       <td className="px-3 py-2 text-gray-500 font-mono text-xs">{svFmt(c.ps + c.dur)}</td>
                       <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
                       <td className="px-3 py-2 text-gray-200">{c.name}</td>
@@ -3195,7 +3241,7 @@
             <div className="flex flex-wrap gap-2 items-center">
               <Btn onClick={savePlan} disabled={!plan.length} cls="bg-amber-600 hover:bg-amber-700 text-white">💾 Enregistrer cette session prévue</Btn>
               {picked && <Btn onClick={() => setPicked(null)} cls="bg-gray-700 hover:bg-gray-600 text-gray-200">↺ Revenir à la proposition</Btn>}
-              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué, avec chaque score plafonné à {PL_CAP} buy-ins, pour ne pas surestimer un coup de chance. Late reg : estimé d'après tes propres inscriptions tardives.</p>
+              <p className="text-[11px] text-gray-500">Clique sur une ligne pour l'ajouter ou la retirer. Les événements de séries (W Series, Million Week, Day 2…) sont exclus des propositions. ROI ajusté : ton ROI sur ce tournoi, ramené vers ta moyenne quand il a été peu joué, avec chaque score plafonné à {PL_CAP} buy-ins, pour ne pas surestimer un coup de chance. Late reg : jusqu'à la fin du niveau 1 pour les Trident, du niveau 3 pour les KO, SKO et Mystery, du niveau 6 pour les Vanilla, calculé avec la durée des niveaux lue dans tes historiques (sinon estimé d'après tes inscriptions tardives). Si une table manque au début, la proposition peut décaler ton inscription dans la late reg.</p>
             </div>
           </>)}
 
