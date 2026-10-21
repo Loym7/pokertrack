@@ -43,6 +43,7 @@
     const {
       LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
       XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList,
+      AreaChart, Area, ReferenceArea, ReferenceDot,
     } = Recharts;
 
     // ─── CONSTANTS ────────────────────────────────────────────────
@@ -1852,213 +1853,393 @@
       const [period, setPeriod]     = useState('all');
       const [dateFrom, setDateFrom] = useState('');
       const [dateTo, setDateTo]     = useState('');
+      const [scoreBy, setScoreBy]   = useState('gains');   // classement des scores : gains bruts ou profit
       const isCustom = period === 'custom';
 
       const cutoff = useMemo(() => {
         if (isCustom || period === 'all') return null;
+        if (period === 'year') return `${new Date().getFullYear()}-01-01`;
         const d = new Date(); d.setDate(d.getDate() - Number(period)); return toStr(d);
       }, [period, isCustom]);
+      const inRange = d => isCustom ? (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo) : (!cutoff || d >= cutoff);
 
-      const filtTourns = useMemo(() => playedTournaments.filter(t => {
-        if (isCustom) {
-          if (dateFrom && t.date < dateFrom) return false;
-          if (dateTo   && t.date > dateTo)   return false;
-        } else { if (cutoff && t.date < cutoff) return false; }
-        return true;
-      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo]);
+      const T = useMemo(() => playedTournaments.filter(t => inRange(t.date))
+        .sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || ''))),
+        [playedTournaments, cutoff, isCustom, dateFrom, dateTo]);
+      const S = useMemo(() => sessions.filter(s => s.type === 'Grind' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo]);
 
-      const filtSess = useMemo(() => sessions.filter(s => {
-        if (s.type !== 'Grind') return false;
-        if (isCustom) {
-          if (dateFrom && s.date < dateFrom) return false;
-          if (dateTo   && s.date > dateTo)   return false;
-        } else { if (cutoff && s.date < cutoff) return false; }
-        return true;
-      }), [sessions, cutoff, isCustom, dateFrom, dateTo]);
-
-      const parseDur = s => {
-        const p = (s.duration || '0h00').replace('h', ':').split(':');
-        return Number(p[0]) + (Number(p[1]) || 0) / 60;
+      // ── formats d'affichage
+      const eur = (v, sign = false, round = false) => {
+        const a = Math.abs(v); const s = a >= 1000 || (round && a >= 100) ? Math.round(a).toLocaleString('fr-FR') : a.toLocaleString('fr-FR', { minimumFractionDigits: a % 1 ? 2 : 0, maximumFractionDigits: 2 });
+        return `${v < 0 ? '−' : sign && v > 0 ? '+' : ''}${s} €`;
       };
+      const dShort = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+      const mins = (a, b) => { if (!a || !b) return null; const [h1, m1] = a.split(':').map(Number), [h2, m2] = b.split(':').map(Number); let d = (h2 * 60 + m2) - (h1 * 60 + m1); if (d < 0) d += 1440; return d; };
+      const hm = m => `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+      const durH = s => { const p = (s.duration || '0h00').replace('h', ':').split(':'); return Number(p[0]) + (Number(p[1]) || 0) / 60; };
+      const ord = p => p === 1 ? '1er' : `${p}e`;
 
-      const sessionsWithProfit = useMemo(() => filtSess.map(s => {
-        const tourns = filtTourns.filter(t => t.session === s.code);
-        const profit = Math.round(tourns.reduce((a, t) => a + t.profit, 0) * 100) / 100;
-        const invest = tourns.reduce((a, t) => a + t.buyIn * t.nbEntry, 0);
-        return { ...s, profit, tourns: tourns.length, invest, heures: Math.round(parseDur(s) * 10) / 10 };
-      }).filter(s => s.tourns > 0), [filtSess, filtTourns]);
+      const R = useMemo(() => {
+        if (!T.length) return null;
+        const cost = t => t.buyIn * t.nbEntry;
+        const max = (arr, f) => arr.reduce((a, b) => (a == null || f(b) > f(a) ? b : a), null);
+        const min = (arr, f) => arr.reduce((a, b) => (a == null || f(b) < f(a) ? b : a), null);
 
-      const bestSess    = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.profit > a.profit ? b : a) : null;
-      const worstSess   = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.profit < a.profit ? b : a) : null;
-      const longestSess = filtSess.length ? [...filtSess].reduce((a, b) => parseDur(b) > parseDur(a) ? b : a) : null;
-      const mostTourns  = sessionsWithProfit.length ? sessionsWithProfit.reduce((a, b) => b.tourns > a.tourns ? b : a) : null;
-      const bestTourn   = filtTourns.length ? filtTourns.reduce((a, b) => b.profit > a.profit ? b : a) : null;
-      const worstTourn  = filtTourns.length ? filtTourns.reduce((a, b) => b.profit < a.profit ? b : a) : null;
-      const biggestGain = filtTourns.length ? filtTourns.reduce((a, b) => b.gains > a.gains ? b : a) : null;
+        // Tournois
+        const paid = T.filter(t => t.buyIn > 0);
+        const scores = [...T].filter(t => (scoreBy === 'gains' ? t.gains : t.profit) > 0)
+          .sort((a, b) => (scoreBy === 'gains' ? b.gains - a.gains : b.profit - a.profit)).slice(0, 10);
+        const mult = max(paid.filter(t => t.gains > 0), t => t.gains / cost(t));
+        const rel = min(T.filter(t => t.place && t.players >= 50), t => t.place / t.players);
+        const bounty = max(T.filter(t => t.bounty > 0), t => t.bounty);
+        const timed = T.map(t => ({ t, m: mins(t.startTime, t.endTime) })).filter(x => x.m != null && x.m < 900);
+        const longest = max(timed, x => x.m);
+        const mostHands = max(T.filter(t => t.hands), t => t.hands);
+        const bigField = max(T.filter(t => t.players && t.itm), t => t.players);
 
-      const sortedSess = [...sessionsWithProfit].sort((a, b) => a.date.localeCompare(b.date));
-      let curStreak = 0, bestStreak = 0, curLose = 0, bestLose = 0, tmp = 0, tmpL = 0;
-      sortedSess.forEach(s => {
-        if (s.profit > 0) { tmp++; tmpL = 0; bestStreak = Math.max(bestStreak, tmp); }
-        else { tmpL++; tmp = 0; bestLose = Math.max(bestLose, tmpL); }
-      });
-      for (let i = sortedSess.length - 1; i >= 0; i--) { if (sortedSess[i].profit > 0) curStreak++; else break; }
-      for (let i = sortedSess.length - 1; i >= 0; i--) { if (sortedSess[i].profit <= 0) curLose++; else break; }
+        const wins = T.filter(t => t.place === 1), podiums = T.filter(t => t.place && t.place <= 3), top9 = T.filter(t => t.place && t.place <= 9);
+        const totals = {
+          n: T.length, entries: T.reduce((a, t) => a + t.nbEntry, 0), itm: T.filter(t => t.itm).length,
+          hands: T.reduce((a, t) => a + (t.hands || 0), 0), bounty: T.reduce((a, t) => a + (t.bounty || 0), 0),
+          profit: T.reduce((a, t) => a + t.profit, 0), inv: T.reduce((a, t) => a + cost(t), 0),
+        };
 
-      // Plus gros gain sur une série gagnante / plus gros down sur une série perdante
-      let bestStreakGain = 0, bestStreakDown = 0, runG = 0, runL = 0;
-      sortedSess.forEach(s => {
-        if (s.profit > 0) { runG += s.profit; runL = 0; bestStreakGain = Math.max(bestStreakGain, runG); }
-        else              { runL += s.profit; runG = 0; bestStreakDown = Math.min(bestStreakDown, runL); }
-      });
-      bestStreakGain = Math.round(bestStreakGain * 100) / 100;
-      bestStreakDown = Math.round(bestStreakDown * 100) / 100;
+        // Courbe cumulée : sommet, plus gros downswing, temps depuis le sommet
+        let cum = 0, peak = 0, peakAt = 0, ddMax = 0, ddFrom = 0, ddTo = 0;
+        const curve = [{ i: 0, cum: 0, date: T[0].date }];
+        T.forEach((t, k) => {
+          cum += t.profit; const i = k + 1;
+          curve.push({ i, cum: Math.round(cum * 100) / 100, date: t.date, name: t.name });
+          if (cum > peak) { peak = cum; peakAt = i; }
+          if (peak - cum > ddMax) { ddMax = peak - cum; ddFrom = peakAt; ddTo = i; }
+        });
+        const last = curve[curve.length - 1];
+        const fromPeak = peak - last.cum;
+        const daysSincePeak = Math.round((new Date(last.date) - new Date(curve[peakAt].date)) / 864e5);
 
-      const RecordCard = ({ emoji, label, value, sub, color = 'text-white', badge, badgeColor, glow }) => (
-        <div className={`relative bg-gradient-to-br from-gray-800 to-gray-800/70 border rounded-xl p-4 space-y-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl
-          ${glow ? 'border-yellow-600/50 shadow-[0_0_24px_-8px_rgba(234,179,8,0.5)] hover:shadow-[0_0_28px_-6px_rgba(234,179,8,0.6)]' : 'border-gray-700 hover:border-gray-600'}`}>
-          <div className="flex items-center gap-2.5">
-            <span className={`flex items-center justify-center w-9 h-9 rounded-full text-lg flex-shrink-0 ring-1
-              ${glow ? 'bg-yellow-500/10 ring-yellow-500/40' : 'bg-gray-900/60 ring-gray-700'}`}>{emoji}</span>
-            <p className="text-[11px] text-gray-500 font-semibold uppercase tracking-wide leading-tight">{label}</p>
+        // Sessions
+        const byCode = {};
+        T.forEach(t => { (byCode[t.session] = byCode[t.session] || []).push(t); });
+        const sess = S.map(s => {
+          const ts = byCode[s.code] || [];
+          const bbH = ts.reduce((a, t) => a + (t.bbHands || 0), 0);
+          return { ...s, ts, n: ts.length, profit: ts.reduce((a, t) => a + t.profit, 0), inv: ts.reduce((a, t) => a + cost(t), 0),
+            hands: ts.reduce((a, t) => a + (t.hands || 0), 0), h: durH(s), bbH,
+            ev: bbH ? 100 * ts.reduce((a, t) => a + (t.bbEV || 0), 0) / bbH : null,
+            luck: ts.reduce((a, t) => a + (t.bbWon || 0) - (t.bbEV || 0), 0) };
+        }).filter(s => s.n > 0).sort((a, b) => a.date.localeCompare(b.date));
+        const sBest = max(sess, s => s.profit), sWorst = min(sess, s => s.profit), sLong = max(sess, s => s.h);
+        const sMostT = max(sess, s => s.n), sMostH = max(sess.filter(s => s.hands), s => s.hands);
+        const sEV = max(sess.filter(s => s.bbH >= 1000), s => s.ev);
+        const sSun = max(sess.filter(s => s.bbH), s => s.luck), sBad = min(sess.filter(s => s.bbH), s => s.luck);
+
+        // Séries de sessions
+        let cw = 0, cl = 0, bw = 0, bl = 0, w = 0, l = 0, gRun = 0, gBest = 0, lRun = 0, lBest = 0;
+        sess.forEach(s => {
+          if (s.profit > 0) { w++; l = 0; bw = Math.max(bw, w); gRun += s.profit; lRun = 0; gBest = Math.max(gBest, gRun); }
+          else { l++; w = 0; bl = Math.max(bl, l); lRun += s.profit; gRun = 0; lBest = Math.min(lBest, lRun); }
+        });
+        for (let i = sess.length - 1; i >= 0 && sess[i].profit > 0; i--) cw++;
+        for (let i = sess.length - 1; i >= 0 && sess[i].profit <= 0; i--) cl++;
+
+        // Mois
+        const mo = {};
+        T.forEach(t => { const k = t.date.slice(0, 7); mo[k] = (mo[k] || 0) + t.profit; });
+        const months = Object.entries(mo).map(([k, v]) => ({ k, v }));
+        const mBest = max(months, m => m.v), mWorst = min(months, m => m.v);
+
+        // Jours (calendrier)
+        const days = {};
+        T.forEach(t => { const d = days[t.date] || (days[t.date] = { p: 0, n: 0 }); d.p += t.profit; d.n += 1; });
+
+        return { scores, mult, rel, bounty, longest, mostHands, bigField, wins, podiums, top9, totals,
+          curve, peak, peakAt, ddMax, ddFrom, ddTo, fromPeak, daysSincePeak, sess, sBest, sWorst, sLong, sMostT, sMostH, sEV, sSun, sBad,
+          cw, cl, bw, bl, gBest, lBest, mBest, mWorst, days, nMonths: months.length };
+      }, [T, S, scoreBy]);
+
+      // ── petits composants
+      const ROOM_DOT = { Winamax: 'bg-red-500', PMU: 'bg-blue-500', Betclic: 'bg-lime-500', Unibet: 'bg-emerald-500', Live: 'bg-amber-500' };
+      const Room = ({ r }) => <span className="inline-flex items-center gap-1.5 text-xs text-gray-400"><span className={`w-1.5 h-1.5 rounded-full ${ROOM_DOT[r] || 'bg-gray-500'}`} />{r}</span>;
+      const Eyebrow = ({ children, cls = 'text-gray-500' }) => <p className={`text-[10.5px] font-semibold uppercase tracking-[0.14em] ${cls}`}>{children}</p>;
+      const Section = ({ title, hint, right, children }) => (
+        <section className="space-y-3">
+          <div className="flex items-end gap-3">
+            <h3 className="text-[15px] font-semibold text-gray-100">{title}</h3>
+            {hint && <p className="text-xs text-gray-500 pb-px">{hint}</p>}
+            <div className="flex-1 h-px bg-gray-800 mb-1.5" />
+            {right}
           </div>
-          <p className={`text-2xl font-bold ${color}`}>{value}</p>
-          {sub && <p className="text-xs text-gray-500 truncate">{sub}</p>}
-          {badge && <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${badgeColor || 'bg-gray-700 text-gray-300'}`}>{badge}</span>}
+          {children}
+        </section>
+      );
+      const Tile = ({ label, value, color = 'text-white', sub, foot, accent = 'from-gray-800/80' }) => (
+        <div className={`rounded-xl border border-gray-800 bg-gradient-to-b ${accent} to-gray-900/60 p-4 flex flex-col gap-1.5 min-w-0`}>
+          <Eyebrow>{label}</Eyebrow>
+          <p className={`text-[22px] leading-tight font-bold tabular-nums ${color}`}>{value}</p>
+          {sub && <p className="text-xs text-gray-300 truncate" title={typeof sub === 'string' ? sub : undefined}>{sub}</p>}
+          {foot && <div className="text-[11px] text-gray-500 truncate">{foot}</div>}
+        </div>
+      );
+      const Stat = ({ label, value, color = 'text-white' }) => (
+        <div className="px-4 py-3 min-w-0">
+          <p className={`text-xl font-bold tabular-nums ${color}`}>{value}</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">{label}</p>
         </div>
       );
 
-      const SectionTitle = ({ icon, children }) => (
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-base">{icon}</span>
-          <p className="text-sm font-semibold uppercase tracking-wide text-gray-400">{children}</p>
-          <div className="flex-1 h-px bg-gradient-to-r from-gray-700 to-transparent" />
+      const header = (
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="mr-auto">
+            <Eyebrow cls="text-yellow-500/80">Hall of fame</Eyebrow>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Records</h2>
+          </div>
+          <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
+            {[['30', '30 j'], ['90', '3 mois'], ['year', 'Cette année'], ['all', 'Tout'], ['custom', 'Plage']].map(([v, l]) => (
+              <button key={v} onClick={() => setPeriod(v)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${period === v ? 'bg-yellow-500 text-gray-900' : 'text-gray-400 hover:text-white'}`}>{l}</button>
+            ))}
+          </div>
+          {isCustom && (<div className="flex gap-2">
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="bg-gray-900 border border-gray-700 rounded-md px-2 py-1.5 text-sm text-white focus:outline-none focus:border-yellow-500" />
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="bg-gray-900 border border-gray-700 rounded-md px-2 py-1.5 text-sm text-white focus:outline-none focus:border-yellow-500" />
+          </div>)}
         </div>
       );
 
-      const empty = (
-        <div className="col-span-full flex flex-col items-center justify-center py-10 text-gray-600 border border-dashed border-gray-700 rounded-xl">
-          <span className="text-3xl mb-2 opacity-40">🔒</span>
-          <p className="text-sm">Pas encore assez de données pour débloquer ces records</p>
+      if (!R) return (
+        <div className="p-4 space-y-6">{header}
+          <div className="rounded-2xl border border-dashed border-gray-700 py-16 text-center text-gray-500">Aucun tournoi sur cette période : élargis la plage pour voir tes records.</div>
         </div>
       );
+
+      const top = R.scores[0];
+      const val = t => scoreBy === 'gains' ? t.gains : t.profit;
+      const MEDAL = [
+        { c: 'text-yellow-300', ring: 'ring-yellow-400/50', bg: 'from-yellow-500/15', h: 'pt-7', n: '1' },
+        { c: 'text-slate-200', ring: 'ring-slate-300/40', bg: 'from-slate-300/10', h: 'pt-4', n: '2' },
+        { c: 'text-amber-500', ring: 'ring-amber-600/40', bg: 'from-amber-700/15', h: 'pt-4', n: '3' },
+      ];
+
+      // Calendrier : 53 dernières semaines jusqu'au dernier jour joué de la période
+      const endD = new Date((T[T.length - 1].date) + 'T12:00:00');
+      const startD = new Date(endD); startD.setDate(startD.getDate() - 364 - ((startD.getDay() + 6) % 7));
+      const weeks = []; let cur = new Date(startD);
+      while (cur <= endD) { const wk = []; for (let i = 0; i < 7; i++) { wk.push(toStr(cur)); cur.setDate(cur.getDate() + 1); } weeks.push(wk); }
+      const dayVals = Object.values(R.days).map(d => Math.abs(d.p)).sort((a, b) => a - b);
+      const ref = dayVals[Math.floor(dayVals.length * 0.9)] || 1;
+      const cellColor = d => {
+        const v = R.days[d]; if (!v) return 'rgba(55,65,81,0.35)';
+        const k = Math.min(1, Math.abs(v.p) / ref), a = 0.25 + 0.75 * k;
+        return v.p >= 0 ? `rgba(34,197,94,${a})` : `rgba(239,68,68,${a})`;
+      };
+      const monthLabels = weeks.map((wk, i) => { const d = new Date(wk[0] + 'T12:00:00'); return (i === 0 || d.getDate() <= 7) ? d.toLocaleDateString('fr-FR', { month: 'short' }) : ''; });
 
       return (
-        <div className="p-4 space-y-6">
+        <div className="p-4 space-y-8">
+          {header}
 
-          {/* Filtres période */}
-          <div className="flex flex-wrap gap-3 items-end">
-            <h2 className="text-lg font-bold text-yellow-400 self-center">🏆 Records</h2>
-            <div>
-              <p className="text-xs text-gray-500 mb-1">Période</p>
-              <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
-                {[['7','7j'],['30','30j'],['all','Tout'],['custom','Plage']].map(([v,l]) => (
-                  <button key={v} onClick={() => setPeriod(v)}
-                    className={`px-3 py-1 rounded text-xs font-medium transition-colors
-                      ${period===v ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-white'}`}>{l}</button>
-                ))}
+          {/* ── Record absolu + bankroll */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {top && (
+              <div className="lg:col-span-2 relative overflow-hidden rounded-2xl border border-yellow-500/30 bg-gradient-to-br from-yellow-500/[0.12] via-gray-900 to-gray-900 p-6">
+                <div className="absolute -right-10 -top-16 w-64 h-64 rounded-full bg-yellow-400/10 blur-3xl pointer-events-none" />
+                <Eyebrow cls="text-yellow-400/90">Record absolu · {scoreBy === 'gains' ? 'plus gros gain' : 'plus gros profit'}</Eyebrow>
+                <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-2">
+                  <p className="text-5xl md:text-6xl font-extrabold tracking-tight tabular-nums text-yellow-300">{eur(val(top))}</p>
+                  {top.buyIn > 0 && top.gains > 0 && <p className="text-lg font-semibold text-yellow-100/80 pb-2 tabular-nums">× {Math.round(top.gains / (top.buyIn * top.nbEntry)).toLocaleString('fr-FR')} le buy-in</p>}
+                </div>
+                <p className="mt-3 text-lg text-white font-semibold truncate">{top.name}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
+                  <Room r={top.room} />
+                  <span>{eur(top.buyIn)} {top.format}</span>
+                  {top.place && <span className="text-gray-200 font-medium">{ord(top.place)}{top.players ? ` / ${top.players.toLocaleString('fr-FR')}${top.playersEst ? ' (est.)' : ''}` : ''}</span>}
+                  {top.bounty > 0 && <span className="text-purple-300">dont {eur(top.bounty)} de bounties</span>}
+                  <span>{dShort(top.date)}</span>
+                </div>
+                <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    ['Place payée', top.prize > 0 ? eur(top.prize) : '—'],
+                    ['Bounties', top.bounty > 0 ? eur(top.bounty) : '—'],
+                    ['Durée', mins(top.startTime, top.endTime) != null ? hm(mins(top.startTime, top.endTime)) : '—'],
+                    ['Mains', top.hands ? top.hands.toLocaleString('fr-FR') : '—'],
+                  ].map(([l, v]) => (
+                    <div key={l} className="rounded-xl bg-black/20 border border-yellow-500/10 px-3 py-2.5">
+                      <p className="text-[10.5px] uppercase tracking-[0.12em] text-yellow-100/50">{l}</p>
+                      <p className="text-base font-semibold text-yellow-50 tabular-nums mt-0.5">{v}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5 grid grid-cols-2 lg:grid-cols-1 gap-4 content-start">
+              <div>
+                <Eyebrow>Sommet de bankroll</Eyebrow>
+                <p className="text-2xl font-bold text-green-400 tabular-nums mt-1">{eur(R.peak, true)}</p>
+                <p className="text-xs text-gray-500">atteint le {dShort(R.curve[R.peakAt].date)}</p>
+              </div>
+              <div>
+                <Eyebrow>Plus gros downswing</Eyebrow>
+                <p className="text-2xl font-bold text-red-400 tabular-nums mt-1">{eur(-R.ddMax)}</p>
+                <p className="text-xs text-gray-500">{R.ddMax > 0 ? `${dShort(R.curve[R.ddFrom].date)} → ${dShort(R.curve[R.ddTo].date)} · ${R.ddTo - R.ddFrom} tournois` : 'aucun'}</p>
+              </div>
+              <div className="col-span-2 lg:col-span-1">
+                <Eyebrow>Depuis le sommet</Eyebrow>
+                <p className={`text-2xl font-bold tabular-nums mt-1 ${R.fromPeak > 0.5 ? 'text-orange-300' : 'text-green-400'}`}>{R.fromPeak > 0.5 ? eur(-R.fromPeak) : 'Au sommet'}</p>
+                <p className="text-xs text-gray-500">{R.fromPeak > 0.5 ? `${R.daysSincePeak} jour${R.daysSincePeak > 1 ? 's' : ''} sans nouveau record` : 'ta courbe est à son plus haut'}</p>
               </div>
             </div>
-            {isCustom && (<>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Du</p>
-                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                  className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-yellow-500" />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Au</p>
-                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                  className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-yellow-500" />
-              </div>
-            </>)}
           </div>
 
-          {/* Bannière héro */}
-          {bestSess && (
-            <div className="relative overflow-hidden rounded-2xl border border-yellow-600/40 bg-gradient-to-br from-yellow-900/30 via-gray-800 to-gray-800 p-5 flex flex-wrap items-center gap-4">
-              <div className="text-5xl flex-shrink-0 drop-shadow-[0_0_12px_rgba(234,179,8,0.5)]">🏆</div>
-              <div className="flex-1 min-w-48">
-                <p className="text-xs text-yellow-400/80 uppercase tracking-wider font-semibold mb-1">Meilleur résultat</p>
-                <p className="text-3xl font-bold text-green-400">+{bestSess.profit.toFixed(2)}€</p>
-                <p className="text-xs text-gray-400 mt-1">{bestSess.code} · {bestSess.date} · {bestSess.tourns} tournois</p>
+          {/* ── Palmarès */}
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/50 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 divide-x divide-y lg:divide-y-0 divide-gray-800 overflow-hidden">
+            <Stat label="Victoires" value={R.wins.length} color="text-yellow-300" />
+            <Stat label="Podiums (top 3)" value={R.podiums.length} color="text-slate-200" />
+            <Stat label="Top 9" value={R.top9.length} color="text-amber-400" />
+            <Stat label="Places payées" value={R.totals.itm} color="text-green-400" />
+            <Stat label="Tournois joués" value={R.totals.n.toLocaleString('fr-FR')} />
+            <Stat label="Mains jouées" value={R.totals.hands >= 1000 ? `${Math.round(R.totals.hands / 1000).toLocaleString('fr-FR')}k` : R.totals.hands} />
+            <Stat label="Bounties gagnés" value={eur(R.totals.bounty)} color="text-purple-300" />
+            <Stat label="Profit sur la période" value={eur(R.totals.profit, true)} color={R.totals.profit >= 0 ? 'text-green-400' : 'text-red-400'} />
+          </div>
+
+          {/* ── Podium + top 10 */}
+          <Section title="Tes plus gros scores" hint="les 10 meilleurs tournois de la période"
+            right={<div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-0.5">
+              {[['gains', 'Gains'], ['profit', 'Profit']].map(([v, l]) => <button key={v} onClick={() => setScoreBy(v)} className={`px-2.5 py-1 rounded text-xs font-medium ${scoreBy === v ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-200'}`}>{l}</button>)}
+            </div>}>
+            {R.scores.length === 0 ? <p className="text-sm text-gray-500">Aucun tournoi gagnant sur la période.</p> : (<>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                {[1, 0, 2].map(idx => { const t = R.scores[idx]; if (!t) return <div key={idx} className="hidden sm:block" />; const m = MEDAL[idx];
+                  return (
+                    <div key={idx} className={`${idx === 0 ? 'order-first sm:order-none' : ''} rounded-2xl border border-gray-800 bg-gradient-to-b ${m.bg} to-gray-900/70 p-4 ${m.h}`}>
+                      <div className="flex items-center gap-3">
+                        <span className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ring-2 ${m.ring} ${m.c} bg-gray-900`}>{m.n}</span>
+                        <div className="min-w-0">
+                          <p className={`text-2xl font-bold tabular-nums ${m.c}`}>{eur(val(t))}</p>
+                          <p className="text-xs text-gray-500">{dShort(t.date)}</p>
+                        </div>
+                      </div>
+                      <p className="mt-3 text-sm text-white font-medium truncate" title={t.name}>{t.name}</p>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-400">
+                        <Room r={t.room} /><span>{eur(t.buyIn)} {t.format}</span>
+                        {t.place && <span>{ord(t.place)}{t.players ? ` / ${t.players.toLocaleString('fr-FR')}` : ''}</span>}
+                      </div>
+                    </div>
+                  ); })}
               </div>
-              {curStreak > 0 && (
-                <div className="text-center px-5 border-l border-gray-700/70">
-                  <p className="text-2xl font-bold text-orange-400 animate-pulse">🔥 {curStreak}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">en série</p>
+              {R.scores.length > 3 && (
+                <div className="rounded-xl border border-gray-800 overflow-x-auto">
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <tbody>
+                      {R.scores.slice(3).map((t, i) => (
+                        <tr key={t.id || i} className="border-t border-gray-800 first:border-t-0 hover:bg-gray-800/40">
+                          <td className="pl-4 pr-2 py-2.5 w-10 text-gray-500 tabular-nums">{i + 4}</td>
+                          <td className="px-2 py-2.5 text-gray-200 max-w-xs truncate">{t.name}</td>
+                          <td className="px-2 py-2.5"><Room r={t.room} /></td>
+                          <td className="px-2 py-2.5 text-gray-400 tabular-nums">{eur(t.buyIn)} {t.format}</td>
+                          <td className="px-2 py-2.5 text-gray-400 tabular-nums">{t.place ? `${ord(t.place)}${t.players ? ` / ${t.players.toLocaleString('fr-FR')}` : ''}` : '—'}</td>
+                          <td className="px-2 py-2.5 text-gray-500">{dShort(t.date)}</td>
+                          <td className="pl-2 pr-4 py-2.5 text-right font-semibold text-green-400 tabular-nums">{eur(val(t))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </div>
-          )}
+            </>)}
+          </Section>
 
-          {/* Sessions */}
-          <div>
-            <SectionTitle icon="🎮">Sessions</SectionTitle>
+          {/* ── Exploits en tournoi */}
+          <Section title="Exploits en tournoi">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+              {R.mult && <Tile label="Plus gros multiplicateur" value={`× ${Math.round(R.mult.gains / (R.mult.buyIn * R.mult.nbEntry)).toLocaleString('fr-FR')}`} color="text-yellow-300" sub={R.mult.name} foot={<><Room r={R.mult.room} /> · {eur(R.mult.buyIn)} → {eur(R.mult.gains)}</>} accent="from-yellow-500/[0.08]" />}
+              {R.rel && <Tile label="Meilleur classement" value={`Top ${(100 * R.rel.place / R.rel.players) < 1 ? (100 * R.rel.place / R.rel.players).toFixed(2) : (100 * R.rel.place / R.rel.players).toFixed(1)} %`} color="text-amber-300" sub={R.rel.name} foot={`${ord(R.rel.place)} / ${R.rel.players.toLocaleString('fr-FR')}${R.rel.playersEst ? ' (est.)' : ''} · ${dShort(R.rel.date)}`} />}
+              {R.bigField && <Tile label="Plus gros field payé" value={R.bigField.players.toLocaleString('fr-FR')} color="text-cyan-300" sub={R.bigField.name} foot={`${ord(R.bigField.place)} · ${eur(R.bigField.gains)} · ${dShort(R.bigField.date)}`} />}
+              {R.bounty && <Tile label="Plus gros bounty" value={eur(R.bounty.bounty)} color="text-purple-300" sub={R.bounty.name} foot={<><Room r={R.bounty.room} /> · {dShort(R.bounty.date)}</>} accent="from-purple-500/[0.08]" />}
+              {R.longest && <Tile label="Plus longue deep run" value={hm(R.longest.m)} color="text-blue-300" sub={R.longest.t.name} foot={`${R.longest.t.startTime} → ${R.longest.t.endTime} · ${dShort(R.longest.t.date)}`} />}
+              {R.mostHands && <Tile label="Plus de mains" value={R.mostHands.hands.toLocaleString('fr-FR')} color="text-gray-100" sub={R.mostHands.name} foot={`${R.mostHands.place ? ord(R.mostHands.place) + ' · ' : ''}${dShort(R.mostHands.date)}`} />}
+            </div>
+          </Section>
+
+          {/* ── Courbe et variance */}
+          <Section title="Ta courbe" hint="profit cumulé tournoi après tournoi, avec ton sommet et ton plus gros downswing">
+            <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
+              <ResponsiveContainer width="100%" height={230}>
+                <AreaChart data={R.curve} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="recFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#facc15" stopOpacity={0.28} /><stop offset="100%" stopColor="#facc15" stopOpacity={0} /></linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="i" type="number" domain={[0, 'dataMax']} tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => v ? `${v}` : ''} />
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${Math.round(v)}€`} width={56} />
+                  {R.ddMax > 0 && <ReferenceArea x1={R.ddFrom} x2={R.ddTo} fill="#ef4444" fillOpacity={0.08} stroke="none" />}
+                  <Tooltip contentStyle={{ background: '#0b1220', border: '1px solid #374151', borderRadius: 8 }} labelStyle={{ color: '#9ca3af' }}
+                    labelFormatter={(v, p) => { const r = p && p[0] && p[0].payload; return r ? `Tournoi ${v} · ${dShort(r.date)}${r.name ? ' · ' + r.name : ''}` : v; }}
+                    formatter={v => [eur(v, true), 'Cumul']} />
+                  <Area type="monotone" dataKey="cum" stroke="#facc15" strokeWidth={2} fill="url(#recFill)" isAnimationActive={false} />
+                  <ReferenceDot x={R.peakAt} y={R.peak} r={5} fill="#22c55e" stroke="#0b1220" strokeWidth={2} />
+                  {R.ddMax > 0 && <ReferenceDot x={R.ddTo} y={R.curve[R.ddTo].cum} r={5} fill="#ef4444" stroke="#0b1220" strokeWidth={2} />}
+                </AreaChart>
+              </ResponsiveContainer>
+              <div className="flex flex-wrap gap-4 text-[11px] text-gray-500 mt-1 px-1">
+                <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500" />sommet</span>
+                <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" />creux du plus gros downswing</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm bg-red-500/20" />durée du downswing</span>
+              </div>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {sessionsWithProfit.length === 0 ? empty : <>
-                <RecordCard emoji="🚀" label="Meilleure session" glow
-                  value={`${bestSess.profit >= 0 ? '+' : ''}${bestSess.profit.toFixed(2)}€`} color="text-green-400"
-                  sub={`${bestSess.code} — ${bestSess.date}`} badge={bestSess.typeSession} />
-                <RecordCard emoji="💸" label="Pire session"
-                  value={`${worstSess.profit.toFixed(2)}€`} color="text-red-400"
-                  sub={`${worstSess.code} — ${worstSess.date}`} badge={worstSess.typeSession} />
-                <RecordCard emoji="⏱" label="Session la plus longue"
-                  value={longestSess.duration} color="text-blue-400"
-                  sub={`${longestSess.code} — ${longestSess.date}`} badge={longestSess.typeSession} />
-                <RecordCard emoji="🎰" label="+ de tournois"
-                  value={`${mostTourns.tourns} tournois`} color="text-purple-400"
-                  sub={`${mostTourns.code} — ${mostTourns.date}`} />
-              </>}
+              <Tile label="Série en cours" value={R.cw || R.cl || '—'} color={R.cw ? 'text-green-400' : 'text-red-400'} sub={R.cw ? `session${R.cw > 1 ? 's' : ''} gagnante${R.cw > 1 ? 's' : ''} d'affilée` : `session${R.cl > 1 ? 's' : ''} perdante${R.cl > 1 ? 's' : ''} d'affilée`} />
+              <Tile label="Meilleure série" value={R.bw} color="text-green-400" sub="sessions gagnantes d'affilée" foot={`${eur(R.gBest, true, true)} sur la série`} />
+              <Tile label="Pire série" value={R.bl} color="text-red-400" sub="sessions perdantes d'affilée" foot={`${eur(R.lBest, false, true)} sur la série`} />
+              {R.mBest && <Tile label="Meilleur mois" value={eur(R.mBest.v, true, true)} color="text-green-400" foot={new Date(R.mBest.k + '-15').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })} />}
+              {R.mWorst && R.nMonths > 1 && <Tile label="Pire mois" value={eur(R.mWorst.v, true, true)} color={R.mWorst.v >= 0 ? 'text-green-400' : 'text-red-400'} foot={new Date(R.mWorst.k + '-15').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })} />}
+              {R.sSun && R.sSun.luck > 0 && <Tile label="Plus gros sun run" value={`+${Math.round(R.sSun.luck)} bb`} color="text-yellow-300" sub="au-dessus de ton EV en une session" foot={dShort(R.sSun.date)} />}
+              {R.sBad && R.sBad.luck < 0 && <Tile label="Plus gros bad run" value={`${Math.round(R.sBad.luck)} bb`} color="text-orange-400" sub="sous ton EV en une session" foot={dShort(R.sBad.date)} />}
+              {R.sEV && <Tile label="Meilleur bb/100 EV" value={fmtBB(R.sEV.ev)} color="text-yellow-300" sub={`sur une session de ${R.sEV.bbH.toLocaleString('fr-FR')} mains`} foot={dShort(R.sEV.date)} />}
             </div>
-          </div>
+          </Section>
 
-          {/* Tournois */}
-          <div>
-            <SectionTitle icon="🃏">Tournois</SectionTitle>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {filtTourns.length === 0 ? empty : <>
-                <RecordCard emoji="💰" label="Tournoi le plus profitable" glow
-                  value={`+${bestTourn.profit.toFixed(2)}€`} color="text-green-400"
-                  sub={`${bestTourn.session} — ${bestTourn.date} — ${bestTourn.room}`}
-                  badge={`${bestTourn.buyIn}€ ${bestTourn.format}`} badgeColor="bg-green-900 text-green-300" />
-                <RecordCard emoji="🔥" label="Plus gros gains bruts"
-                  value={`${biggestGain.gains}€`} color="text-yellow-400"
-                  sub={`${biggestGain.session} — ${biggestGain.date} — ${biggestGain.room}`}
-                  badge={`${biggestGain.buyIn}€ ${biggestGain.format}`} badgeColor="bg-yellow-900 text-yellow-300" />
-                <RecordCard emoji="📉" label="Tournoi le plus perdant"
-                  value={`${worstTourn.profit.toFixed(2)}€`} color="text-red-400"
-                  sub={`${worstTourn.session} — ${worstTourn.date} — ${worstTourn.room}`}
-                  badge={`${worstTourn.buyIn}€ ${worstTourn.format}`} badgeColor="bg-red-900 text-red-300" />
-              </>}
+          {/* ── Sessions */}
+          <Section title="Sessions">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+              {R.sBest && <Tile label="Meilleure session" value={eur(R.sBest.profit, true, true)} color="text-green-400" sub={dShort(R.sBest.date)} foot={`${R.sBest.n} tournois · ${R.sBest.typeSession || ''}`} accent="from-green-500/[0.07]" />}
+              {R.sWorst && <Tile label="Pire session" value={eur(R.sWorst.profit, true, true)} color={R.sWorst.profit >= 0 ? 'text-green-400' : 'text-red-400'} sub={dShort(R.sWorst.date)} foot={`${R.sWorst.n} tournois · ${R.sWorst.typeSession || ''}`} accent="from-red-500/[0.06]" />}
+              {R.sLong && <Tile label="Plus longue session" value={R.sLong.duration} color="text-blue-300" sub={dShort(R.sLong.date)} foot={`${R.sLong.start} → ${R.sLong.end}`} />}
+              {R.sMostT && <Tile label="Plus de tournois" value={R.sMostT.n} color="text-gray-100" sub={dShort(R.sMostT.date)} foot={`${eur(R.sMostT.inv)} investis`} />}
+              {R.sMostH && <Tile label="Plus de mains" value={R.sMostH.hands.toLocaleString('fr-FR')} color="text-gray-100" sub={dShort(R.sMostH.date)} foot={`${R.sMostH.n} tournois`} />}
             </div>
-          </div>
+          </Section>
 
-          {/* Séries */}
-          <div>
-            <SectionTitle icon="⚡">Séries</SectionTitle>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {sessionsWithProfit.length === 0 ? empty : <>
-                <RecordCard emoji="🔥" label="Série gagnante en cours" glow={curStreak > 0}
-                  value={`${curStreak} session${curStreak > 1 ? 's' : ''}`}
-                  color={curStreak > 0 ? 'text-green-400' : 'text-gray-500'} />
-                <RecordCard emoji="🏅" label="Meilleure série gagnante"
-                  value={`${bestStreak} session${bestStreak > 1 ? 's' : ''}`}
-                  color="text-yellow-400" />
-                <RecordCard emoji="💹" label="Plus gros gain en série"
-                  value={`+${bestStreakGain.toFixed(2)}€`}
-                  color="text-green-400" />
-                <RecordCard emoji="❄️" label="Série perdante en cours"
-                  value={`${curLose} session${curLose > 1 ? 's' : ''}`}
-                  color={curLose > 0 ? 'text-red-400' : 'text-gray-500'} />
-                <RecordCard emoji="📊" label="Pire série perdante"
-                  value={`${bestLose} session${bestLose > 1 ? 's' : ''}`}
-                  color="text-orange-400" />
-                <RecordCard emoji="🕳️" label="Plus gros down en série"
-                  value={`${bestStreakDown.toFixed(2)}€`}
-                  color="text-red-400" />
-              </>}
+          {/* ── Calendrier */}
+          <Section title="Ton année en un coup d'œil" hint="une case par jour, couleur selon le profit">
+            <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4 overflow-x-auto">
+              <div className="inline-flex flex-col gap-1 min-w-max">
+                <div className="flex gap-1 pl-7 text-[10px] text-gray-500 h-3">
+                  {monthLabels.map((m, i) => <div key={i} className="w-[17px] overflow-visible whitespace-nowrap">{m}</div>)}
+                </div>
+                <div className="flex gap-1">
+                  <div className="flex flex-col gap-1 w-6 text-[10px] text-gray-600 pr-1">
+                    {['lun', '', 'mer', '', 'ven', '', ''].map((d, i) => <div key={i} className="h-[17px] leading-[17px]">{d}</div>)}
+                  </div>
+                  {weeks.map((wk, i) => (
+                    <div key={i} className="flex flex-col gap-1">
+                      {wk.map(d => { const v = R.days[d]; const out = !inRange(d) || d > T[T.length - 1].date;
+                        return <div key={d} className="w-[17px] h-[17px] rounded-[4px]" style={{ background: out && !v ? 'rgba(31,41,55,0.25)' : cellColor(d) }}
+                          title={v ? `${dShort(d)} · ${eur(v.p, true)} · ${v.n} tournoi${v.n > 1 ? 's' : ''}` : dShort(d)} />; })}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 pl-7 pt-2 text-[10px] text-gray-500">
+                  <span>perte</span>
+                  {[1, 0.6, 0.3].map(a => <span key={'r' + a} className="w-[17px] h-[17px] rounded-[4px]" style={{ background: `rgba(239,68,68,${0.25 + 0.75 * a})` }} />)}
+                  <span className="w-[17px] h-[17px] rounded-[4px]" style={{ background: 'rgba(55,65,81,0.35)' }} />
+                  {[0.3, 0.6, 1].map(a => <span key={'g' + a} className="w-[17px] h-[17px] rounded-[4px]" style={{ background: `rgba(34,197,94,${0.25 + 0.75 * a})` }} />)}
+                  <span>gain</span>
+                  <span className="ml-4">{Object.keys(R.days).length} jours joués</span>
+                </div>
+              </div>
             </div>
-          </div>
+          </Section>
         </div>
       );
     }
