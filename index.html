@@ -3029,6 +3029,104 @@
       }) };
     }
 
+    // ─── Catalogue : tri par colonne + filtres ──
+    const CAT_PREFS_KEY = 'pt_catalogue_prefs';
+    const CAT_DEF = { q: '', rooms: [], formats: [], minBuy: 0, maxBuy: 0, day: '', from: '', to: '', minN: 1, minAdj: -100, result: '', recent: 0, sort: 'adj', dir: -1 };
+    const CAT_COLS = [
+      ['room','Room','t'], ['name','Tournoi','t'], ['format','Format','t'], ['buyIn','Buy-in','n'], ['start','Début','n'], ['late','Late reg','n'],
+      ['dur','Durée moy.','n'], [null,'Jours'], ['players','Joueurs','n'], ['n','Joué','n'], ['itm','ITM','n'],
+      ['profit','Profit','n'], ['roi','ROI réel','n'], ['adj','ROI ajusté','n'], [null,''],
+    ];
+    const CatL = ({ t, children }) => <div><p className="text-xs text-gray-500 mb-1">{t}</p>{children}</div>;
+    function CatalogueView({ cat, badge }) {
+      const [f, setF] = useState(() => { try { return { ...CAT_DEF, ...(JSON.parse(localStorage.getItem(CAT_PREFS_KEY) || '{}') || {}) }; } catch (e) { return { ...CAT_DEF }; } });
+      useEffect(() => { try { localStorage.setItem(CAT_PREFS_KEY, JSON.stringify(f)); } catch (e) {} }, [f]);
+      const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+      const toggleIn = (k, v) => setF(p => ({ ...p, [k]: p[k].includes(v) ? p[k].filter(x => x !== v) : [...p[k], v] }));
+      const rooms = useMemo(() => [...new Set(cat.items.map(c => c.room))], [cat]);
+      const formats = useMemo(() => FORMATS.filter(x => cat.items.some(c => c.format === x)), [cat]);
+      const sortBy = (k, type) => setF(p => p.sort === k ? { ...p, dir: -p.dir } : { ...p, sort: k, dir: type === 't' ? 1 : -1 });
+      const rows = useMemo(() => {
+        const fromM = f.from ? svMin(f.from) : null, toM = f.to ? svMin(f.to) : null;
+        let cut = ''; if (f.recent) { const d = new Date(); d.setDate(d.getDate() - f.recent); cut = toStr(d); }
+        const out = cat.items.filter(c =>
+          (!f.q || c.name.toLowerCase().includes(f.q.toLowerCase()))
+          && (!f.rooms.length || f.rooms.includes(c.room))
+          && (!f.formats.length || f.formats.includes(c.format))
+          && (!f.minBuy || c.buyIn >= f.minBuy) && (!f.maxBuy || c.buyIn <= f.maxBuy)
+          && (f.day === '' || c.daily || c.days[f.day])
+          && (fromM == null || (c.start != null && c.start >= fromM)) && (toM == null || (c.start != null && c.start <= toM))
+          && c.n >= f.minN && c.adj >= f.minAdj / 100
+          && (!f.result || (f.result === 'win' ? c.profit > 0 : c.profit < 0))
+          && (!cut || c.last >= cut));
+        const k = f.sort, d = f.dir;
+        return out.sort((a, b) => {
+          const x = a[k], y = b[k];
+          if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+          return (typeof x === 'string' ? x.localeCompare(y) : x - y) * d;
+        });
+      }, [cat, f]);
+      const inv = rows.reduce((a, c) => a + c.inv, 0), prof = rows.reduce((a, c) => a + c.profit, 0), nT = rows.reduce((a, c) => a + c.n, 0);
+      const chip = (on, label, onClick, cls) => <button key={label} onClick={onClick} className={`px-2 py-1 rounded text-xs font-semibold ${on ? cls : 'bg-gray-700 text-gray-400'}`}>{label}</button>;
+      const tInput = (k) => <input type="time" value={f[k]} onChange={e => set(k, e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white" />;
+      return (
+        <div className="space-y-3">
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3">
+            <div className="flex flex-wrap gap-3 items-end">
+              <CatL t="Recherche"><Inp value={f.q} onChange={v => set('q', v)} placeholder="Nom du tournoi…" cls="w-56" /></CatL>
+              <CatL t="Buy-in mini"><Sel value={f.minBuy} onChange={v => set('minBuy', Number(v))} options={[0,1,2,3,5,10,20,50].map(v => ({ value: v, label: v ? `${v} €` : 'aucun' }))} /></CatL>
+              <CatL t="Buy-in max"><Sel value={f.maxBuy} onChange={v => set('maxBuy', Number(v))} options={[0,2,5,10,20,50,100].map(v => ({ value: v, label: v ? `${v} €` : 'aucun' }))} /></CatL>
+              <CatL t="Jour"><Sel value={f.day} onChange={v => set('day', v)} options={[{ value: '', label: 'tous' }, ...[1,2,3,4,5,6,0].map(d => ({ value: String(d), label: PL_DAYS[d] }))]} /></CatL>
+              <CatL t="Début entre"><div className="flex items-center gap-1">{tInput('from')}<span className="text-gray-500 text-xs">et</span>{tInput('to')}</div></CatL>
+              <CatL t="Joué au moins"><Sel value={f.minN} onChange={v => set('minN', Number(v))} options={[1,3,5,10,20,50].map(v => ({ value: v, label: `${v} fois` }))} /></CatL>
+              <CatL t="ROI ajusté mini"><Sel value={f.minAdj} onChange={v => set('minAdj', Number(v))} options={[-100,-15,0,10,20].map(v => ({ value: v, label: v === -100 ? 'tous' : `${v > 0 ? '+' : ''}${v} %` }))} /></CatL>
+              <CatL t="Résultat"><Sel value={f.result} onChange={v => set('result', v)} options={[{ value: '', label: 'tous' }, { value: 'win', label: 'gagnants' }, { value: 'lose', label: 'perdants' }]} /></CatL>
+              <CatL t="Joué récemment"><Sel value={f.recent} onChange={v => set('recent', Number(v))} options={[{ value: 0, label: 'peu importe' }, { value: 30, label: '30 derniers jours' }, { value: 60, label: '60 derniers jours' }, { value: 120, label: '4 derniers mois' }]} /></CatL>
+            </div>
+            <div className="flex flex-wrap gap-1 items-center">
+              <span className="text-xs text-gray-500 mr-1">Room</span>{rooms.map(r => chip(f.rooms.includes(r), r, () => toggleIn('rooms', r), ROOM_CLS[r]))}
+              <span className="text-xs text-gray-500 ml-3 mr-1">Format</span>{formats.map(x => chip(f.formats.includes(x), x, () => toggleIn('formats', x), FMT_CLS[x] || 'bg-gray-600 text-white'))}
+              <button onClick={() => setF({ ...CAT_DEF, sort: f.sort, dir: f.dir })} className="ml-auto text-xs text-amber-300 underline">Réinitialiser les filtres</button>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400">{rows.length} tournois différents · joués {nT} fois · profit <span className={prof >= 0 ? 'text-green-400' : 'text-red-400'}>{svEur(prof, true)}</span> · ROI {plPct(inv ? prof / inv : 0)} <span className="text-gray-600">(ROI global {plPct(cat.global)})</span> · clique sur un titre de colonne pour trier</p>
+          <div className="overflow-x-auto rounded-lg border border-gray-700">
+            <table className="w-full text-sm" style={{ minWidth: '1150px' }}>
+              <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
+                <tr>{CAT_COLS.map(([k, l, type], i) => (
+                  <th key={i} onClick={k ? () => sortBy(k, type) : undefined} className={`px-3 py-2 text-left whitespace-nowrap ${k ? 'cursor-pointer select-none hover:text-white' : ''} ${f.sort === k ? 'text-amber-300' : ''}`}>
+                    {l}{f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}
+                  </th>))}</tr>
+              </thead>
+              <tbody>
+                {rows.map(c => (
+                  <tr key={c.key} className="border-t border-gray-700">
+                    <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
+                    <td className="px-3 py-2 text-gray-200">{c.name}</td>
+                    <td className="px-3 py-2"><Badge cls={FMT_CLS[c.format] || 'bg-gray-600 text-white'}>{c.format}</Badge></td>
+                    <td className="px-3 py-2 text-gray-300">{c.buyIn}€</td>
+                    <td className="px-3 py-2 text-gray-300 font-mono">{c.start != null ? svFmt(c.start) : '—'}</td>
+                    <td className="px-3 py-2 text-gray-400 font-mono text-xs whitespace-nowrap">{c.late != null ? svFmt(c.late) : '—'}{c.late != null && c.lateFrom !== 'niveaux' && <span className="text-gray-600"> ~</span>}</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{svDur(c.dur)}</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{c.daily ? 'tous les jours' : Object.keys(c.days).map(d => PL_DAYS[d]).join(' ')}</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{c.players ? `${c.playersEst ? '~' : ''}${c.players}` : '—'}</td>
+                    <td className="px-3 py-2 text-gray-400">{c.n}×</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{(c.itm * 100).toFixed(0)} %</td>
+                    <td className={`px-3 py-2 ${c.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{svEur(c.profit, true)}</td>
+                    <td className={`px-3 py-2 text-xs ${c.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.roi)}</td>
+                    <td className={`px-3 py-2 font-bold ${c.adj >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.adj)}</td>
+                    <td className="px-3 py-2">{badge(c)}</td>
+                  </tr>
+                ))}
+                {rows.length === 0 && <tr><td colSpan={CAT_COLS.length} className="px-3 py-8 text-center text-gray-500">Aucun tournoi avec ces filtres.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-gray-500">Late reg « ~ » : estimée d'après tes inscriptions tardives (durée des niveaux pas encore importée).</p>
+        </div>
+      );
+    }
+
     function PlannerTab({ playedTournaments, plans, setPlans }) {
       const cat = useMemo(() => plCatalogue(playedTournaments), [playedTournaments]);
       const rooms = useMemo(() => [...new Set(cat.items.map(c => c.room))], [cat]);
@@ -3045,8 +3143,6 @@
       useEffect(() => { try { localStorage.setItem(PL_PREFS_KEY, JSON.stringify({ minBuy, maxBuy, maxTables, minN, minAdj, recent })); } catch (e) {} }, [minBuy, maxBuy, maxTables, minN, minAdj, recent]);
       const [picked, setPicked] = useState(null);   // null = proposition automatique
       const [view, setView] = useState('plan');
-      const [q, setQ] = useState('');
-      const [sortBy, setSortBy] = useState('adj');
       const nowStr = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
       const [liveNow, setLiveNow] = useState(nowStr());
       const [liveTables, setLiveTables] = useState(0);
@@ -3127,8 +3223,6 @@
       };
       const loadPlan = p => { setDate(p.date); setFrom(p.from); setTo(p.to); setTimeout(() => setPicked(new Set(p.items.map(i => i.key))), 0); setView('plan'); };
 
-      const catRows = useMemo(() => cat.items.filter(c => c.n >= 1 && (!q || c.name.toLowerCase().includes(q.toLowerCase())))
-        .sort((a, b) => sortBy === 'start' ? (a.start ?? 9999) - (b.start ?? 9999) : sortBy === 'n' ? b.n - a.n : b.adj - a.adj), [cat, q, sortBy]);
 
       return (
         <div className="p-4 space-y-5">
@@ -3351,41 +3445,7 @@
             </div>
           )}
 
-          {view === 'cat' && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap gap-3 items-end">
-                <Inp value={q} onChange={setQ} placeholder="Rechercher un tournoi…" cls="w-64" />
-                <div><p className="text-xs text-gray-500 mb-1">Trier par</p><Sel value={sortBy} onChange={setSortBy} options={[{ value:'adj', label:'ROI ajusté' }, { value:'n', label:'Nombre de fois joué' }, { value:'start', label:'Heure de début' }]} /></div>
-                <p className="text-xs text-gray-500">{catRows.length} tournois différents · ROI global {plPct(cat.global)}</p>
-              </div>
-              <div className="overflow-x-auto rounded-lg border border-gray-700">
-                <table className="w-full text-sm" style={{ minWidth: '1050px' }}>
-                  <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                    <tr>{['Room','Tournoi','Format','Buy-in','Début','Durée méd.','Jours','Joueurs','Joué','Profit','ROI réel','ROI ajusté',''].map((h, i) => <th key={i} className="px-3 py-2 text-left">{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {catRows.map(c => (
-                      <tr key={c.key} className="border-t border-gray-700">
-                        <td className="px-3 py-2"><Badge cls={ROOM_CLS[c.room]}>{c.room}</Badge></td>
-                        <td className="px-3 py-2 text-gray-200">{c.name}</td>
-                        <td className="px-3 py-2"><Badge cls={FMT_CLS[c.format] || 'bg-gray-600 text-white'}>{c.format}</Badge></td>
-                        <td className="px-3 py-2 text-gray-300">{c.buyIn}€</td>
-                        <td className="px-3 py-2 text-gray-300 font-mono">{c.start != null ? svFmt(c.start) : '—'}</td>
-                        <td className="px-3 py-2 text-gray-400 text-xs">{svDur(c.dur)}</td>
-                        <td className="px-3 py-2 text-gray-400 text-xs">{c.daily ? 'tous les jours' : Object.keys(c.days).map(d => PL_DAYS[d]).join(' ')}</td>
-                        <td className="px-3 py-2 text-gray-400 text-xs">{c.players ? `${c.playersEst ? '~' : ''}${c.players}` : '—'}</td>
-                        <td className="px-3 py-2 text-gray-400">{c.n}×</td>
-                        <td className={`px-3 py-2 ${c.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{svEur(c.profit, true)}</td>
-                        <td className={`px-3 py-2 text-xs ${c.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.roi)}</td>
-                        <td className={`px-3 py-2 font-bold ${c.adj >= 0 ? 'text-green-400' : 'text-red-400'}`}>{plPct(c.adj)}</td>
-                        <td className="px-3 py-2">{badge(c)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          {view === 'cat' && <CatalogueView cat={cat} badge={badge} />}
         </div>
       );
     }
