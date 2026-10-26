@@ -4186,6 +4186,104 @@
       return <PokerApp user={user} />;
     }
 
+    // ─── TOURNOIS À COMPLÉTER ─────────────────────────────────────
+    // Le script d'import marque (aCompleter) les tournois dont le résultat n'est écrit nulle part
+    // dans les fichiers (résumé Winamax absent, place PMU non écrite, export Betclic coupé…).
+    // Les réponses vont dans pt_corrections : le script les réapplique à chaque import.
+    function applyCorrection(t, c) {
+      const n = { ...t };
+      if (c.out) { n.prize = 0; }
+      else {
+        if (c.place) n.place = c.place;
+        if (c.prize != null) n.prize = c.prize;
+        if (c.bounty != null) n.bounty = c.bounty;
+      }
+      n.gains  = Math.round(((n.prize || 0) + (n.bounty || 0)) * 100) / 100;
+      n.profit = Math.round((n.gains - (n.buyIn || 0) * (n.nbEntry || 1)) * 100) / 100;
+      n.itm = (n.prize || 0) > 0;
+      delete n.aCompleter; delete n.probaITM;
+      n.notes = [String(n.notes || '').split('; ').filter(x => x && !/résumé|place non trouvée|A COMPLETER|pas de fin/.test(x)).join('; '),
+                 'résultat complété dans l\'app'].filter(Boolean).join('; ');
+      return n;
+    }
+
+    function CompleteRow({ t, onSave }) {
+      const [place, setPlace]   = useState('');
+      const [prize, setPrize]   = useState('');
+      const [bounty, setBounty] = useState(t.bounty ? String(t.bounty).replace('.', ',') : '');
+      const num = v => { const x = parseFloat(String(v).replace(',', '.')); return isNaN(x) ? null : x; };
+      const p = t.probaITM;
+      const pc = p == null ? null : Math.round(p * 100);
+      const col = p == null ? 'text-gray-500' : p >= 0.6 ? 'text-green-400' : p >= 0.3 ? 'text-yellow-400' : 'text-gray-500';
+      const ok = num(prize) != null || num(place) != null;
+      return (
+        <div className="border border-gray-800 rounded-lg p-3 bg-gray-900">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+            <span className="text-gray-400">{String(t.date || '').split('-').reverse().join('/')}</span>
+            <span className="text-gray-500">{t.startTime}{t.endTime ? ' → ' + t.endTime : ''}</span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">{t.room}</span>
+            <span className="font-medium text-white">{t.name}</span>
+            <span className="text-gray-400">{t.buyIn ? t.buyIn + ' €' : 'Day 2'}{t.nbEntry > 1 ? ' ×' + t.nbEntry : ''}</span>
+            <span className="text-gray-500">{t.hands} mains</span>
+            {pc != null && <span className={`ml-auto text-xs ${col}`}>{pc} % de chances d'être payé</span>}
+          </div>
+          <div className="text-xs text-gray-500 mt-0.5">{t.aCompleter}</div>
+          <div className="flex flex-wrap items-end gap-2 mt-2">
+            <label className="text-xs text-gray-500">Place<br/>
+              <input value={place} onChange={e => setPlace(e.target.value)} inputMode="numeric"
+                className="w-16 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white" /></label>
+            <label className="text-xs text-gray-500">Gain place (€)<br/>
+              <input value={prize} onChange={e => setPrize(e.target.value)} inputMode="decimal"
+                className="w-24 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white" /></label>
+            <label className="text-xs text-gray-500">Bounties (€)<br/>
+              <input value={bounty} onChange={e => setBounty(e.target.value)} inputMode="decimal"
+                className="w-24 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white" /></label>
+            <button disabled={!ok}
+              onClick={() => onSave(t, { place: num(place) ? Math.round(num(place)) : null, prize: num(prize) ?? 0, bounty: num(bounty) ?? (t.bounty || 0) })}
+              className={`px-3 py-1.5 rounded text-sm font-medium ${ok ? 'bg-green-600 hover:bg-green-500 text-white' : 'bg-gray-800 text-gray-600 cursor-not-allowed'}`}>Valider</button>
+            <button onClick={() => onSave(t, { out: true })}
+              className="px-3 py-1.5 rounded text-sm bg-gray-800 hover:bg-gray-700 text-gray-300">Hors des places</button>
+          </div>
+        </div>
+      );
+    }
+
+    function CompleteModal({ pending, onSave, onSaveMany, onClose }) {
+      const sorted = [...pending].sort((a, b) => ((b.probaITM ?? -1) - (a.probaITM ?? -1)) || String(b.date).localeCompare(String(a.date)));
+      const likely   = sorted.filter(t => (t.probaITM ?? 0) >= 0.3);
+      const unlikely = sorted.filter(t => (t.probaITM ?? 0) < 0.3);
+      const [showAll, setShowAll] = useState(false);
+      return (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 overflow-y-auto" onClick={onClose}>
+          <div className="bg-gray-950 border border-gray-800 rounded-xl w-full max-w-3xl my-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3 p-4 border-b border-gray-800">
+              <div>
+                <h2 className="text-lg font-bold text-white">Tournois à compléter ({pending.length})</h2>
+                <p className="text-xs text-gray-500 mt-1">Ces résultats ne sont écrits dans aucun fichier de la room. Tes réponses sont gardées et réappliquées à chaque import.</p>
+              </div>
+              <button onClick={onClose} className="ml-auto text-gray-500 hover:text-white text-xl leading-none">×</button>
+            </div>
+            <div className="p-4 space-y-3">
+              {likely.length > 0 && <h3 className="text-sm font-semibold text-yellow-400">Probablement payés ({likely.length})</h3>}
+              {likely.map(t => <CompleteRow key={t.id} t={t} onSave={onSave} />)}
+              {unlikely.length > 0 && (
+                <div className="pt-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-400">Probablement éliminés hors des places ({unlikely.length})</h3>
+                    <button onClick={() => { if (confirm(`Marquer ces ${unlikely.length} tournois comme « hors des places » ?`)) onSaveMany(unlikely); }}
+                      className="ml-auto px-3 py-1.5 rounded text-sm bg-gray-800 hover:bg-gray-700 text-gray-200">Tous hors des places</button>
+                    <button onClick={() => setShowAll(v => !v)} className="text-xs text-gray-500 hover:text-gray-300 underline">{showAll ? 'masquer' : 'voir le détail'}</button>
+                  </div>
+                  {showAll && <div className="space-y-3 mt-3">{unlikely.map(t => <CompleteRow key={t.id} t={t} onSave={onSave} />)}</div>}
+                </div>
+              )}
+              {pending.length === 0 && <p className="text-sm text-green-400">Tout est complet ✓</p>}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // ─── ROOT ─────────────────────────────────────────────────────
     function PokerApp({ user }) {
       const [activeTab, setActiveTab]       = useState('mysessions');
@@ -4193,6 +4291,22 @@
       const [sessions,   setSessions,   sessLoaded]   = usePersist(LS_KEYS.sessions,  INIT_SESSIONS);
       const [played,     setPlayed,     playedLoaded] = usePersistChunked(LS_KEYS.played, INIT_PLAYED);
       const [plans,      setPlans]                    = usePersist(LS_KEYS.plans, []);
+      const [corrections, setCorrections]             = usePersist('pt_corrections', {});
+      const [showComplete, setShowComplete] = useState(false);
+      const pendingCompl = useMemo(() => played.filter(t => t && t.aCompleter && !(corrections || {})[t.id]), [played, corrections]);
+      const nLikely = pendingCompl.filter(t => (t.probaITM ?? 0) >= 0.3).length;
+      // s'ouvre tout seul une fois par visite s'il reste des tournois probablement payés à compléter
+      useEffect(() => {
+        if (!playedLoaded || !nLikely) return;
+        try { if (sessionStorage.getItem('pt_compl_seen')) return; sessionStorage.setItem('pt_compl_seen', '1'); } catch {}
+        setShowComplete(true);
+      }, [playedLoaded, nLikely]);
+      const saveCorrections = (list, data) => {
+        const at = Date.now();
+        setCorrections(c => { const n = { ...(c || {}) }; list.forEach(t => { n[t.id] = { ...data(t), at }; }); return n; });
+        const byId = new Map(list.map(t => [t.id, data(t)]));
+        setPlayed(prev => prev.map(t => byId.has(t.id) ? applyCorrection(t, byId.get(t.id)) : t));
+      };
       const [online, setOnline]             = useState(navigator.onLine);
       const [fbError, setFbError]           = useState(false);
       useEffect(() => {
@@ -4263,6 +4377,14 @@
                 <span>·</span>
                 <span>{played.length} tournois</span>
               </div>
+              {/* Tournois à compléter */}
+              {pendingCompl.length > 0 && (
+                <button onClick={() => setShowComplete(true)}
+                  className={`text-xs px-2 py-1 rounded border ${nLikely ? 'border-yellow-600 text-yellow-400 hover:bg-yellow-900/30' : 'border-gray-700 text-gray-400 hover:bg-gray-800'}`}
+                  title="Tournois dont le résultat manque dans les fichiers des rooms">
+                  ⚠ {pendingCompl.length} à compléter
+                </button>
+              )}
               {/* Sync */}
               {fbError ? (
                 <div className="flex items-center gap-1.5 text-xs text-red-400" title="Erreur de synchronisation Firebase — données sauvées localement uniquement">
@@ -4304,6 +4426,13 @@
             <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
             <div className={activeTab==='analyse'   ? '' : 'hidden'}>{activeTab==='analyse' && <AnalyseTab playedTournaments={played} />}</div>
           </main>
+
+          {showComplete && (
+            <CompleteModal pending={pendingCompl}
+              onSave={(t, c) => saveCorrections([t], () => c)}
+              onSaveMany={list => saveCorrections(list, () => ({ out: true }))}
+              onClose={() => setShowComplete(false)} />
+          )}
 
           {/* ── Nav mobile (bottom) ── */}
           <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-gray-950 border-t border-gray-800 flex z-40">
