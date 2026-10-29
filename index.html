@@ -118,6 +118,16 @@
       return `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}`;
     }
 
+    // Moment de la journée d'un tournoi, selon son heure de début :
+    // Matin jusqu'à 12h59, Après-midi de 13h à 17h59, Soir à partir de 18h (et après minuit, avant 6h).
+    const MOMENTS = ['Matin', 'Après-midi', 'Soir'];
+    function momentTournoi(t) {
+      const h = parseInt((t.startTime || '').slice(0, 2), 10);
+      if (isNaN(h)) return '?';
+      if (h < 6 || h >= 18) return 'Soir';
+      return h < 13 ? 'Matin' : 'Après-midi';
+    }
+
     function typeSession(start) {
       if (!start) return 'Soir';
       const h = parseInt(start.split(':')[0], 10);
@@ -2389,9 +2399,10 @@
         const total = hGrind + hTravail + hExpresso;
         const pct = h => total > 0 ? Math.round(h / total * 100) : 0;
         const sumEntries = arr => arr.reduce((a, t) => a + (t.nbEntry || 1), 0);
-        const MOMENT_COLORS = { Jour: '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
-        const byMomentCount = ['Jour', 'Soir', 'Live'].map(m => ({
-          name: m, value: sumEntries(filtered.filter(t => filtSess.find(s => s.code === t.session && s.typeSession === m))), fill: MOMENT_COLORS[m],
+        const MOMENT_COLORS = { Matin: '#fbbf24', 'Après-midi': '#38bdf8', Soir: '#818cf8', Live: '#34d399' };
+        const momentOf = t => { const ss = filtSess.find(s => s.code === t.session); return (ss && ss.typeSession === 'Live') || t.room === 'Live' ? 'Live' : momentTournoi(t); };
+        const byMomentCount = [...MOMENTS, 'Live'].map(m => ({
+          name: m, value: sumEntries(filtered.filter(t => momentOf(t) === m)), fill: MOMENT_COLORS[m],
         })).filter(x => x.value > 0);
         const byFormatCount = FORMATS.map(f => ({ name: f, value: sumEntries(filtered.filter(t => t.format === f)), fill: FMT_CHART[f] || '#6b7280' })).filter(x => x.value > 0);
         const byFieldCount  = FIELDS.map(f => ({ name: f, value: sumEntries(filtered.filter(t => t.field === f)) })).filter(x => x.value > 0);
@@ -3656,8 +3667,7 @@
       { id:'format',  label:'Format',            key: t => t.format || '?' },
       { id:'roomfield', label:'Room × Field',    key: t => `${t.room} · ${t.field || '?'}` },
       { id:'roombuyin', label:'Room × Buy-in',   key: t => `${t.room} · ${t.buyIn <= 6 ? '≤ 5 €' : t.buyIn <= 12 ? '10 €' : '20 € +'}` },
-      { id:'moment',  label:'Moment (Jour / Soir)', key: t => { const h = parseInt((t.startTime || '').slice(0, 2), 10); return isNaN(h) ? '?' : (h >= 17 || h < 6) ? 'Soir' : 'Jour'; } },
-      { id:'heure',   label:'Heure de début',    key: t => { const h = parseInt((t.startTime || '').slice(0, 2), 10); if (isNaN(h)) return '?'; return h < 12 ? 'Matin (< 12h)' : h < 17 ? 'Après-midi (12-17h)' : h < 21 ? 'Soirée (17-21h)' : 'Nuit (≥ 21h)'; }, order:['Matin (< 12h)','Après-midi (12-17h)','Soirée (17-21h)','Nuit (≥ 21h)'] },
+      { id:'moment',  label:'Moment de la journée', key: t => momentTournoi(t), order:['Matin','Après-midi','Soir','?'] },
       { id:'jour',    label:'Jour de la semaine', key: t => ['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'][new Date(t.date + 'T12:00:00').getDay()], order:['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'] },
       { id:'mois',    label:'Mois',              key: t => (t.date || '').slice(0, 7) },
     ];
