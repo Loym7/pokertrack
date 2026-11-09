@@ -66,6 +66,7 @@
       'Niv 3': 'bg-red-600 text-white',
     };
     const FMT_CLS = {
+      SPIN: 'bg-pink-600 text-white',
       PKO: 'bg-purple-600 text-white',
       SKO: 'bg-indigo-500 text-white',
       TRIDENT: 'bg-sky-600 text-white',
@@ -2320,6 +2321,7 @@
       const [fBuyin, setFBuyin]       = useState([]);
       const [fField, setFField]       = useState([]);
       const [fPseudo, setFPseudo]     = useState([]);        // clés « room|pseudo »
+      const [joueur, setJoueur]       = useState('');        // '' = toi ; sinon nom d'un autre joueur
       const [showFilters, setShowFilters] = useState(false);
       const [curveMode, setCurveMode] = useState('eur');     // 'eur' ou 'bb'
       const [segBy, setSegBy]         = useState('format');  // répartition : room, format, buyIn, field
@@ -2342,14 +2344,17 @@
       // Un même pseudo peut exister sur plusieurs rooms, d'où la clé room|pseudo.
       const pseudoOf  = t => String(t.hero || t.pseudo || '').trim();
       const pseudoKey = t => pseudoOf(t) ? `${t.room}|${pseudoOf(t)}` : '';
+      const JOUEURS = useMemo(() => [...new Set(playedTournaments.map(t => t.joueur).filter(Boolean))].sort(), [playedTournaments]);
+      const ofJoueur = t => (t.joueur || '') === joueur;
       const PSEUDOS = useMemo(() => {
         const n = {};
-        playedTournaments.forEach(t => { const k = pseudoKey(t); if (k) n[k] = (n[k] || 0) + 1; });
+        playedTournaments.forEach(t => { if (!ofJoueur(t)) return; const k = pseudoKey(t); if (k) n[k] = (n[k] || 0) + 1; });
         return Object.keys(n).sort((a, b) => a.split('|')[0].localeCompare(b.split('|')[0]) || n[b] - n[a]);
-      }, [playedTournaments]);
+      }, [playedTournaments, joueur]);
       const pseudoLabel = k => { const [r, ps] = k.split('|'); return `${ps} · ${r}`; };
 
       const filtered = useMemo(() => playedTournaments.filter(t => {
+        if (!ofJoueur(t)) return false;
         if (!inRange(t.date)) return false;
         if (fRoom.length   > 0 && !fRoom.includes(t.room))     return false;
         if (fFormat.length > 0 && !fFormat.includes(t.format)) return false;
@@ -2357,9 +2362,9 @@
         if (fField.length  > 0 && !fField.includes(t.field))   return false;
         if (fPseudo.length > 0 && !fPseudo.includes(pseudoKey(t))) return false;
         return true;
-      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo, fRoom, fFormat, fBuyin, fField, fPseudo]);
+      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo, fRoom, fFormat, fBuyin, fField, fPseudo, joueur]);
 
-      const filtSess = useMemo(() => sessions.filter(s => s.type === 'Grind' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo]);
+      const filtSess = useMemo(() => joueur ? [] : sessions.filter(s => s.type === 'Grind' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo, joueur]);
       const parseDur = s => { const p = (s.duration || '0h00').replace('h', ':').split(':'); return Number(p[0]) + (Number(p[1]) || 0) / 60; };
 
       const kpi = useMemo(() => {
@@ -2404,11 +2409,11 @@
       const segMax = Math.max(1, ...segRows.map(r => Math.abs(r.profit)));
 
       // ── Données de l'onglet Structure
-      const filtTravail = useMemo(() => sessions.filter(s => s.type === 'Travail' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo]);
+      const filtTravail = useMemo(() => joueur ? [] : sessions.filter(s => s.type === 'Travail' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo, joueur]);
       const structData = useMemo(() => {
         const hGrind = filtSess.reduce((a, s) => a + parseDur(s), 0);
         const hTravail = filtTravail.reduce((a, s) => a + parseDur(s), 0);
-        const hExpresso = expressoSessions.filter(s => !cutoff || (s.date || '') >= cutoff).reduce((a, s) => a + parseDur(s), 0);
+        const hExpresso = joueur ? 0 : expressoSessions.filter(s => !cutoff || (s.date || '') >= cutoff).reduce((a, s) => a + parseDur(s), 0);
         const total = hGrind + hTravail + hExpresso;
         const pct = h => total > 0 ? Math.round(h / total * 100) : 0;
         const sumEntries = arr => arr.reduce((a, t) => a + (t.nbEntry || 1), 0);
@@ -2557,12 +2562,13 @@
           {/* ── En-tête : titre, onglets, période */}
           <div className="flex flex-wrap items-end gap-3">
             <div className="mr-auto">
-              <Eyebrow cls="text-green-500/80">Dashboard · {periodLabel}</Eyebrow>
+              <Eyebrow cls="text-green-500/80">Dashboard{joueur ? ` · ${joueur}` : ''} · {periodLabel}</Eyebrow>
               <div className="flex items-center gap-4 mt-1">
                 <h2 className="text-2xl font-bold text-white tracking-tight">{dashTab === 'tournois' ? 'Performance' : 'Structure'}</h2>
                 <Seg value={dashTab} onChange={setDashTab} options={[['tournois', 'Performance'], ['sessions', 'Structure']]} accent="bg-gray-700 text-white" />
               </div>
             </div>
+            {JOUEURS.length > 0 && <Seg value={joueur} onChange={v => { setJoueur(v); setFPseudo([]); setPage(1); }} options={[['', 'Moi'], ...JOUEURS.map(j => [j, j])]} accent="bg-purple-700 text-white" />}
             <Seg value={period} onChange={v => { setPeriod(v); setPage(1); }} options={[['7', '7 j'], ['30', '30 j'], ['90', '3 mois'], ['year', 'Année'], ['all', 'Tout'], ['custom', 'Plage']]} />
             <button onClick={() => setShowFilters(s => !s)}
               className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${showFilters || activeChips.length ? 'border-green-700 text-green-300 bg-green-900/20' : 'border-gray-800 text-gray-400 hover:text-white bg-gray-900'}`}>
@@ -4320,6 +4326,9 @@
       const [plans,      setPlans]                    = usePersist(LS_KEYS.plans, []);
       const [corrections, setCorrections]             = usePersist('pt_corrections', {});
       const [showComplete, setShowComplete] = useState(false);
+      // Tournois d'autres joueurs (champ « joueur », écrit par le script d'import) : visibles
+      // uniquement dans le Dashboard, via le sélecteur Joueur. Partout ailleurs, seulement toi.
+      const mine = useMemo(() => played.filter(t => t && !t.joueur), [played]);
       const pendingCompl = useMemo(() => played.filter(t => t && t.aCompleter && !(corrections || {})[t.id]), [played, corrections]);
       const nLikely = pendingCompl.filter(t => (t.probaITM ?? 0) >= 0.3).length;
       // s'ouvre tout seul une fois par visite s'il reste des tournois probablement payés à compléter
@@ -4446,12 +4455,12 @@
 
           {/* ── Contenu principal ── */}
           <main className="max-w-screen-xl mx-auto pb-20 md:pb-0">
-            <div className={activeTab==='mysessions' ? '' : 'hidden'}><MySessionsTab sessions={sessions} playedTournaments={played} /></div>
-            <div className={activeTab==='planner'   ? '' : 'hidden'}>{activeTab==='planner' && <PlannerTab playedTournaments={played} plans={plans} setPlans={setPlans} />}</div>
-            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={played} setPlayed={setPlayed} /></div>
+            <div className={activeTab==='mysessions' ? '' : 'hidden'}><MySessionsTab sessions={sessions} playedTournaments={mine} /></div>
+            <div className={activeTab==='planner'   ? '' : 'hidden'}>{activeTab==='planner' && <PlannerTab playedTournaments={mine} plans={plans} setPlans={setPlans} />}</div>
+            <div className={activeTab==='sessions'  ? '' : 'hidden'}><SessionsTab sessions={sessions} setSessions={setSessions} playedTournaments={mine} setPlayed={setPlayed} /></div>
             <div className={activeTab==='dashboard' ? '' : 'hidden'}><DashboardTab sessions={sessions} playedTournaments={played} /></div>
-            <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={played} /></div>
-            <div className={activeTab==='analyse'   ? '' : 'hidden'}>{activeTab==='analyse' && <AnalyseTab playedTournaments={played} />}</div>
+            <div className={activeTab==='records'   ? '' : 'hidden'}><RecordsTab sessions={sessions} playedTournaments={mine} /></div>
+            <div className={activeTab==='analyse'   ? '' : 'hidden'}>{activeTab==='analyse' && <AnalyseTab playedTournaments={mine} />}</div>
           </main>
 
           {showComplete && (
