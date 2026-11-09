@@ -2319,6 +2319,7 @@
       const [fFormat, setFFormat]     = useState([]);
       const [fBuyin, setFBuyin]       = useState([]);
       const [fField, setFField]       = useState([]);
+      const [fPseudo, setFPseudo]     = useState([]);        // clés « room|pseudo »
       const [showFilters, setShowFilters] = useState(false);
       const [curveMode, setCurveMode] = useState('eur');     // 'eur' ou 'bb'
       const [segBy, setSegBy]         = useState('format');  // répartition : room, format, buyIn, field
@@ -2337,14 +2338,26 @@
       }, [period, isCustom]);
       const inRange = d => isCustom ? (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo) : (!cutoff || d >= cutoff);
 
+      // Pseudo : champ « hero » (ou « pseudo ») écrit par le script d'import.
+      // Un même pseudo peut exister sur plusieurs rooms, d'où la clé room|pseudo.
+      const pseudoOf  = t => String(t.hero || t.pseudo || '').trim();
+      const pseudoKey = t => pseudoOf(t) ? `${t.room}|${pseudoOf(t)}` : '';
+      const PSEUDOS = useMemo(() => {
+        const n = {};
+        playedTournaments.forEach(t => { const k = pseudoKey(t); if (k) n[k] = (n[k] || 0) + 1; });
+        return Object.keys(n).sort((a, b) => a.split('|')[0].localeCompare(b.split('|')[0]) || n[b] - n[a]);
+      }, [playedTournaments]);
+      const pseudoLabel = k => { const [r, ps] = k.split('|'); return `${ps} · ${r}`; };
+
       const filtered = useMemo(() => playedTournaments.filter(t => {
         if (!inRange(t.date)) return false;
         if (fRoom.length   > 0 && !fRoom.includes(t.room))     return false;
         if (fFormat.length > 0 && !fFormat.includes(t.format)) return false;
         if (fBuyin.length  > 0 && !fBuyin.includes(t.buyIn))   return false;
         if (fField.length  > 0 && !fField.includes(t.field))   return false;
+        if (fPseudo.length > 0 && !fPseudo.includes(pseudoKey(t))) return false;
         return true;
-      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo, fRoom, fFormat, fBuyin, fField]);
+      }), [playedTournaments, cutoff, isCustom, dateFrom, dateTo, fRoom, fFormat, fBuyin, fField, fPseudo]);
 
       const filtSess = useMemo(() => sessions.filter(s => s.type === 'Grind' && inRange(s.date)), [sessions, cutoff, isCustom, dateFrom, dateTo]);
       const parseDur = s => { const p = (s.duration || '0h00').replace('h', ':').split(':'); return Number(p[0]) + (Number(p[1]) || 0) / 60; };
@@ -2362,7 +2375,7 @@
         const abi    = totalEntries > 0 ? invest / totalEntries : 0;
         const bounty = filtered.reduce((a, t) => a + (t.bounty || 0), 0);
         const hands  = filtered.reduce((a, t) => a + (t.hands || 0), 0);
-        const filtersOn = fRoom.length + fFormat.length + fBuyin.length + fField.length > 0;
+        const filtersOn = fRoom.length + fFormat.length + fBuyin.length + fField.length + fPseudo.length > 0;
         return { grind: filtSess.length, hours: totalH, total: filtered.length, roi, profit, invest, gains, itm, itmR, reEntries, abi, totalEntries,
           bounty, hands, perHour: !filtersOn && totalH > 0 ? profit / totalH : null, bb: bbStats(filtered) };
       }, [filtered, filtSess]);
@@ -2520,6 +2533,7 @@
         ...fFormat.map(v => ({ v, label: v, clear: () => toggle(setFFormat)(v) })),
         ...fBuyin.map(v => ({ v, label: `${v} €`, clear: () => toggle(setFBuyin)(v) })),
         ...fField.map(v => ({ v, label: `field ${v}`, clear: () => toggle(setFField)(v) })),
+        ...fPseudo.map(v => ({ v, label: pseudoLabel(v), clear: () => toggle(setFPseudo)(v) })),
       ];
       const ChipGroup = ({ title, items, sel, onToggle, render, cls }) => (
         <div>
@@ -2564,11 +2578,14 @@
           )}
 
           {showFilters && (
-            <Card cls="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 -mt-2">
+            <Card cls="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 -mt-2">
               <ChipGroup title="Room" items={ROOMS} sel={fRoom} onToggle={toggle(setFRoom)} cls={r => ROOM_CLS[r]} />
               <ChipGroup title="Format" items={FORMATS} sel={fFormat} onToggle={toggle(setFFormat)} cls={f => FMT_CLS[f]} />
               <ChipGroup title="Buy-in" items={BUY_INS} sel={fBuyin} onToggle={toggle(setFBuyin)} render={b => `${b} €`} cls={() => 'bg-indigo-600'} />
               <ChipGroup title="Field" items={FIELDS} sel={fField} onToggle={toggle(setFField)} cls={() => 'bg-cyan-700'} />
+              {PSEUDOS.length > 0
+                ? <ChipGroup title="Pseudo" items={PSEUDOS} sel={fPseudo} onToggle={toggle(setFPseudo)} render={pseudoLabel} cls={k => ROOM_CLS[k.split('|')[0]] || 'bg-gray-600'} />
+                : <div><p className="text-[11px] text-gray-500 mb-1.5">Pseudo</p><p className="text-xs text-gray-600">Aucun pseudo dans les tournois importés : le script d'import doit écrire le champ « hero ».</p></div>}
             </Card>
           )}
           {!showFilters && activeChips.length > 0 && (
@@ -2578,7 +2595,7 @@
                   {c.label}<span className="text-gray-500 group-hover:text-red-400">✕</span>
                 </button>
               ))}
-              <button onClick={() => { setFRoom([]); setFFormat([]); setFBuyin([]); setFField([]); setPage(1); }} className="text-xs text-gray-500 hover:text-red-400 ml-1">tout effacer</button>
+              <button onClick={() => { setFRoom([]); setFFormat([]); setFBuyin([]); setFField([]); setFPseudo([]); setPage(1); }} className="text-xs text-gray-500 hover:text-red-400 ml-1">tout effacer</button>
             </div>
           )}
 
